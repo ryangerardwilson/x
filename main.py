@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -72,7 +73,7 @@ def post_tweet(text):
     return response.json()
 
 
-def parse_args():
+def build_parser():
     parser = argparse.ArgumentParser(
         description="Post to X from the command line."
     )
@@ -99,7 +100,7 @@ def parse_args():
         action="store_true",
         help="Upgrade to the latest version.",
     )
-    return parser.parse_args()
+    return parser
 
 
 def _version_tuple(version):
@@ -189,7 +190,14 @@ def read_from_vim():
 
     try:
         while True:
-            subprocess.run(["vim", temp_path], check=False)
+            editor = os.getenv("EDITOR", "vim").strip()
+            editor_cmd = shlex.split(editor) if editor else ["vim"]
+            if not editor_cmd:
+                editor_cmd = ["vim"]
+            try:
+                subprocess.run(editor_cmd + [temp_path], check=False)
+            except FileNotFoundError:
+                raise SystemExit(f"Editor not found: {editor_cmd[0]}")
             with open(temp_path, "r", encoding="utf-8") as handle:
                 text = handle.read().strip()
 
@@ -213,7 +221,8 @@ def read_from_vim():
 
 
 def main():
-    args = parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
 
     if args.version:
         print(__version__)
@@ -256,7 +265,8 @@ def main():
         text = " ".join(args.text).strip()
 
     if not text:
-        raise SystemExit("Message text is empty. Use -e to compose in Vim.")
+        parser.print_help()
+        return
 
     result = post_tweet(text)
     tweet_id = result.get("data", {}).get("id", "unknown")
