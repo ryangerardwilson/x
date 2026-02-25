@@ -1,0 +1,10 @@
+{
+  "reply_guy_targets": [
+    "naval",
+    "levelsio"
+  ],
+  "reply_guy_fetch_limit": 20,
+  "reply_guy_per_target_limit": 5,
+  "reply_guy_exclude_replies": true,
+  "reply_guy_exclude_retweets": true
+}
