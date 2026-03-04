@@ -1,15 +1,25 @@
 import argparse
+import base64
 import json
+import mimetypes
 import os
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import requests
 from requests_oauthlib import OAuth1
+from xdk import Client as XdkClient
+from xdk.media.models import (
+    AppendUploadRequest,
+    InitializeUploadRequest,
+    UploadRequest,
+)
+from xdk.posts.models import CreateRequest, CreateRequestMedia
 
 try:
     from _version import __version__
@@ -18,6 +28,10 @@ except Exception:
 
 INSTALL_URL = "https://raw.githubusercontent.com/ryangerardwilson/x/main/install.sh"
 LATEST_RELEASE_API = "https://api.github.com/repos/ryangerardwilson/x/releases/latest"
+MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
+MEDIA_UPLOAD_RETRIES = 8
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+DEFAULT_OAUTH2_TOKEN_FILE = "~/.x/oauth2_token.json"
 
 
 def get_env(name, fallback_name=None):
@@ -56,20 +70,333 @@ def build_auth():
     return OAuth1(consumer_key, consumer_secret, access_token, access_token_secret)
 
 
-def post_tweet(text):
-    auth = build_auth()
-    response = requests.post(
-        "https://api.x.com/2/tweets",
-        json={"text": text},
-        auth=auth,
-        timeout=30,
+def get_user_access_token():
+    env_token = (
+        get_env("X_USER_ACCESS_TOKEN", "TWITTER_USER_ACCESS_TOKEN")
+        or get_env("X_OAUTH2_USER_TOKEN", "TWITTER_OAUTH2_USER_TOKEN")
+        or get_env("X_BEARER_TOKEN", "TWITTER_BEARER_TOKEN")
+    )
+    if env_token:
+        return env_token
+
+    token_file = (
+        get_env("X_OAUTH2_TOKEN_FILE", "TWITTER_OAUTH2_TOKEN_FILE")
+        or DEFAULT_OAUTH2_TOKEN_FILE
+    )
+    token_file = os.path.expanduser(token_file)
+    if not os.path.isfile(token_file):
+        return None
+
+    try:
+        with open(token_file, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    token_obj = payload.get("token")
+    if isinstance(token_obj, dict):
+        expires_at = token_obj.get("expires_at")
+        if isinstance(expires_at, (int, float)) and int(expires_at) <= int(time.time()):
+            return None
+        access_token = token_obj.get("access_token")
+        if isinstance(access_token, str) and access_token.strip():
+            return access_token.strip()
+
+    access_token = payload.get("access_token")
+    if isinstance(access_token, str) and access_token.strip():
+        return access_token.strip()
+    return None
+
+
+def _run_oauth2_login_helper():
+    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oauth2_login.py")
+    if not os.path.isfile(helper):
+        raise RuntimeError(f"Missing helper script: {helper}")
+    return subprocess.call([sys.executable, helper])
+
+
+def _build_xdk_client(access_token):
+    if not access_token:
+        raise RuntimeError("Missing OAuth2 user access token for XDK client.")
+    return XdkClient(access_token=access_token)
+
+
+def _response_to_dict(payload):
+    if isinstance(payload, dict):
+        return payload
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(exclude_none=True)
+    return {}
+
+
+def _raise_for_x_error(response):
+    if 200 <= response.status_code < 300:
+        return
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        errors = payload.get("errors")
+        if isinstance(errors, list):
+            for err in errors:
+                if isinstance(err, dict) and err.get("code") == 453:
+                    raise RuntimeError(
+                        "X API access error (453): this app/token is restricted to a subset of endpoints. "
+                        "Your current access level does not allow the attempted endpoint. "
+                        "Check your plan in https://developer.x.com/en/portal/product, then regenerate user tokens."
+                    )
+    if response.status_code == 503:
+        raise RuntimeError(
+            "X API error 503: Media service unavailable after retries. "
+            "This is typically transient on X's side; retry in 30-120 seconds."
+        )
+    raise RuntimeError(f"X API error {response.status_code}: {response.text.strip()}")
+
+
+def _retry_delay_seconds(response, attempt):
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(1, min(int(retry_after), 60))
+        except ValueError:
+            pass
+    return min(2 ** attempt, 16)
+
+
+def _xdk_call_with_retries(method, *args, retries=MEDIA_UPLOAD_RETRIES, **kwargs):
+    for attempt in range(retries + 1):
+        try:
+            return method(*args, **kwargs)
+        except requests.HTTPError as exc:
+            response = exc.response
+            status = response.status_code if response is not None else None
+            if status not in RETRYABLE_STATUS_CODES or attempt == retries:
+                if response is not None:
+                    request_id = response.headers.get("x-request-id")
+                    body = (response.text or "").strip()
+                    detail = f"X API error {status}"
+                    if request_id:
+                        detail += f" (x-request-id: {request_id})"
+                    if body:
+                        detail += f": {body}"
+                    raise RuntimeError(detail) from exc
+                raise
+            time.sleep(_retry_delay_seconds(response, attempt))
+        except requests.RequestException:
+            if attempt == retries:
+                raise
+            time.sleep(min(2 ** attempt, 16))
+
+
+def _request_with_retries(method, url, auth=None, headers=None, retries=4, **kwargs):
+    for attempt in range(retries + 1):
+        response = requests.request(method, url, auth=auth, headers=headers, **kwargs)
+        if response.status_code not in RETRYABLE_STATUS_CODES:
+            return response
+        if attempt == retries:
+            return response
+        time.sleep(_retry_delay_seconds(response, attempt))
+    return response
+
+
+def _payload_data(payload):
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        return payload["data"]
+    return payload if isinstance(payload, dict) else {}
+
+
+def _media_id_from_payload(payload):
+    data = _payload_data(payload)
+    media_id = (
+        data.get("id")
+        or data.get("media_id_string")
+        or data.get("media_id")
+        or payload.get("media_id_string")
+        or payload.get("media_id")
+    )
+    if not media_id:
+        raise RuntimeError("Upload succeeded but media_id was missing in response.")
+    return str(media_id)
+
+
+def _detect_media_type(path):
+    media_type, _ = mimetypes.guess_type(path)
+    if media_type:
+        return media_type
+
+    extension = os.path.splitext(path)[1].lower()
+    fallback_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+    }
+    media_type = fallback_types.get(extension)
+    if media_type:
+        return media_type
+
+    raise RuntimeError(
+        f"Unsupported media type for '{path}'. Use a common image/video format."
     )
 
-    if response.status_code not in (200, 201):
-        raise RuntimeError(
-            f"X API error {response.status_code}: {response.text.strip()}"
+
+def _media_category_for_type(media_type):
+    if media_type == "image/gif":
+        return "tweet_gif"
+    if media_type.startswith("image/"):
+        return "tweet_image"
+    if media_type.startswith("video/"):
+        return "tweet_video"
+    raise RuntimeError(
+        f"Unsupported media type '{media_type}'. Only images, GIFs, and videos are supported."
+    )
+
+
+def _wait_for_media_processing(media_client, media_id, processing_info):
+    attempts = 0
+    if not isinstance(processing_info, dict):
+        processing_info = _response_to_dict(processing_info)
+    while processing_info:
+        state = processing_info.get("state")
+        if state == "succeeded":
+            return
+        if state == "failed":
+            error = processing_info.get("error") or {}
+            code = error.get("code", "unknown")
+            message = error.get("message", "unknown failure")
+            raise RuntimeError(f"Media processing failed ({code}): {message}")
+        if state not in ("pending", "in_progress"):
+            raise RuntimeError(f"Unexpected media processing state: {state}")
+
+        attempts += 1
+        if attempts > 30:
+            raise RuntimeError("Timed out waiting for media processing.")
+
+        wait_seconds = int(processing_info.get("check_after_secs", 2))
+        wait_seconds = max(1, min(wait_seconds, 30))
+        time.sleep(wait_seconds)
+
+        status_response = _xdk_call_with_retries(
+            media_client.get_upload_status,
+            media_id,
+            command="STATUS",
+            retries=MEDIA_UPLOAD_RETRIES,
+        )
+        status_payload = _response_to_dict(status_response)
+        processing_info = _payload_data(status_payload).get("processing_info")
+
+
+def _chunked_media_upload(media_client, media_path, media_type, media_category):
+    total_bytes = os.path.getsize(media_path)
+    init_response = _xdk_call_with_retries(
+        media_client.initialize_upload,
+        InitializeUploadRequest(
+            total_bytes=total_bytes,
+            media_type=media_type,
+            media_category=media_category,
+        ),
+        retries=MEDIA_UPLOAD_RETRIES,
+    )
+    init_payload = _response_to_dict(init_response)
+    media_id = _media_id_from_payload(init_payload)
+
+    with open(media_path, "rb") as media_file:
+        segment_index = 0
+        while True:
+            chunk = media_file.read(MEDIA_CHUNK_SIZE)
+            if not chunk:
+                break
+
+            encoded_chunk = base64.b64encode(chunk).decode("ascii")
+            _xdk_call_with_retries(
+                media_client.append_upload,
+                media_id,
+                AppendUploadRequest(
+                    media=encoded_chunk,
+                    segment_index=segment_index,
+                ),
+                retries=MEDIA_UPLOAD_RETRIES,
+            )
+            segment_index += 1
+
+    finalize_response = _xdk_call_with_retries(
+        media_client.finalize_upload,
+        media_id,
+        retries=MEDIA_UPLOAD_RETRIES,
+    )
+    finalize_payload = _response_to_dict(finalize_response)
+    processing_info = _payload_data(finalize_payload).get("processing_info")
+    _wait_for_media_processing(media_client, media_id, processing_info)
+    return media_id
+
+
+def upload_media(xdk_client, media_path):
+    media_path = os.path.expanduser(media_path)
+    if not os.path.isfile(media_path):
+        raise RuntimeError(f"Media file not found: {media_path}")
+
+    media_type = _detect_media_type(media_path)
+    media_category = _media_category_for_type(media_type)
+    media_size = os.path.getsize(media_path)
+    if media_size <= 0:
+        raise RuntimeError(f"Media file is empty: {media_path}")
+
+    media_client = xdk_client.media
+
+    if media_category == "tweet_image" and media_size <= 5 * 1024 * 1024:
+        with open(media_path, "rb") as media_file:
+            encoded_media = base64.b64encode(media_file.read()).decode("ascii")
+        upload_response = _xdk_call_with_retries(
+            media_client.upload,
+            UploadRequest(
+                media=encoded_media,
+                media_category=media_category,
+                media_type=media_type,
+            ),
+            retries=MEDIA_UPLOAD_RETRIES,
+        )
+        payload = _response_to_dict(upload_response)
+        media_id = _media_id_from_payload(payload)
+        _wait_for_media_processing(media_client, media_id, _payload_data(payload).get("processing_info"))
+        return media_id
+
+    return _chunked_media_upload(media_client, media_path, media_type, media_category)
+
+
+def post_tweet(auth, headers, text, media_ids=None, xdk_client=None):
+    if xdk_client is not None:
+        body = CreateRequest(text=text)
+        if media_ids:
+            body.media = CreateRequestMedia(media_ids=[str(media_id) for media_id in media_ids])
+        return _xdk_call_with_retries(
+            xdk_client.posts.create,
+            body,
+            retries=MEDIA_UPLOAD_RETRIES,
         )
 
+    payload = {"text": text}
+    if media_ids:
+        payload["media"] = {"media_ids": [str(media_id) for media_id in media_ids]}
+
+    response = _request_with_retries(
+        "POST",
+        "https://api.x.com/2/tweets",
+        auth=auth,
+        headers=headers,
+        json=payload,
+        timeout=30,
+    )
+    if 200 <= response.status_code < 300:
+        return response.json()
+
+    _raise_for_x_error(response)
     return response.json()
 
 
@@ -80,7 +407,12 @@ def build_parser():
     parser.add_argument(
         "text",
         nargs="*",
-        help="Post text. If omitted, use -v to open Vim.",
+        help="Post text. If omitted, use -e to open Vim.",
+    )
+    parser.add_argument(
+        "-m",
+        "--media",
+        help="Path to an image/GIF/video to attach.",
     )
     parser.add_argument(
         "-e",
@@ -229,7 +561,7 @@ def main():
         return
 
     if args.upgrade:
-        if args.text or args.edit:
+        if args.text or args.edit or args.media:
             raise SystemExit("Use -u by itself to upgrade.")
 
         latest = _get_latest_version()
@@ -261,16 +593,53 @@ def main():
 
     if args.edit:
         text = read_from_vim()
+        media_path = args.media
     else:
-        text = " ".join(args.text).strip()
+        text_parts = list(args.text)
+        media_path = args.media
+        # Allow: python main.py "text" /path/to/media.mp4
+        if media_path is None and len(text_parts) >= 2 and os.path.isfile(text_parts[-1]):
+            media_path = text_parts.pop()
+        text = " ".join(text_parts).strip()
 
     if not text:
         parser.print_help()
         return
 
-    result = post_tweet(text)
-    tweet_id = result.get("data", {}).get("id", "unknown")
-    print(f"Posted to X. id={tweet_id}")
+    oauth2_user_token = get_user_access_token()
+    if not oauth2_user_token:
+        print(
+            "No valid OAuth2 user token found. Starting browser login...",
+            file=sys.stderr,
+        )
+        rc = _run_oauth2_login_helper()
+        if rc == 0:
+            oauth2_user_token = get_user_access_token()
+
+    auth = None
+    headers = None
+    xdk_client = None
+    if oauth2_user_token:
+        headers = {"Authorization": f"Bearer {oauth2_user_token}"}
+        xdk_client = _build_xdk_client(oauth2_user_token)
+    elif media_path:
+        raise SystemExit(
+            "Media posting requires a valid OAuth 2.0 user access token with media.write."
+        )
+    else:
+        auth = build_auth()
+
+    media_ids = None
+    if media_path:
+        media_ids = [upload_media(xdk_client, media_path)]
+
+    result = post_tweet(auth, headers, text, media_ids=media_ids, xdk_client=xdk_client)
+    result_payload = _response_to_dict(result)
+    tweet_id = result_payload.get("data", {}).get("id", "unknown")
+    if media_ids:
+        print(f"Posted to X with media. id={tweet_id}")
+    else:
+        print(f"Posted to X. id={tweet_id}")
 
 
 if __name__ == "__main__":
