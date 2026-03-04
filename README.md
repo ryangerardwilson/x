@@ -10,29 +10,10 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Set credentials (OAuth 1.0a user context):
+Set your X OAuth2 app credentials (for PKCE login):
 
 ```bash
-export X_CONSUMER_KEY="..."
-export X_CONSUMER_SECRET="..."
-export X_ACCESS_TOKEN="..."
-export X_ACCESS_TOKEN_SECRET="..."
-```
-
-You can also use `TWITTER_*` equivalents for the same values.
-
-For media uploads (`--media` or positional media path), set an OAuth 2.0 user token:
-
-```bash
-export X_USER_ACCESS_TOKEN="..."
-```
-
-(`X_OAUTH2_USER_TOKEN` is also accepted.)
-
-You can fetch an OAuth2 user token with PKCE login:
-
-```bash
-python oauth2_login.py --client-id "$X_CLIENT_ID"
+export X_CLIENT_ID="..."
 ```
 
 If your X app is a confidential client, also set:
@@ -47,14 +28,38 @@ X Developer Console callback URL for this flow:
 https://callback-omega-one.vercel.app/callback/x
 ```
 
-Set that same value in runtime if needed (optional, already default):
+Set the same redirect URI in runtime if needed (optional; this is already the default in `oauth2_login.py`):
 
 ```bash
 export X_OAUTH2_REDIRECT_URI="https://callback-omega-one.vercel.app/callback/x"
 ```
 
-By default this saves token JSON to `~/.x/oauth2_token.json`, which `main.py` reads automatically.
-If no valid OAuth2 token is found at post time, `main.py` automatically starts this login flow.
+You can fetch an OAuth2 user token manually:
+
+```bash
+python oauth2_login.py --client-id "$X_CLIENT_ID"
+```
+
+Or let `main.py` do it automatically: when no valid token is found, it launches `oauth2_login.py`.
+By default tokens are saved to:
+
+```text
+~/.x/oauth2_token.json
+```
+
+You can also provide a token directly instead of login:
+
+```bash
+export X_USER_ACCESS_TOKEN="..."
+```
+
+`X_OAUTH2_USER_TOKEN` and `X_BEARER_TOKEN` are also accepted.
+
+Optional fallback for text-only posts: set OAuth 1.0a user credentials (`X_CONSUMER_KEY`, `X_CONSUMER_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`), or `TWITTER_*` equivalents.
+
+Notes:
+- The CLI now uses the official Python XDK for v2 media upload and post creation.
+- Access tier matters. `POST /2/tweets` and media upload may fail until your app has an eligible paid tier (for example, pay-as-you-go).
 
 ## Usage
 
@@ -83,6 +88,12 @@ python main.py -e
 ```
 
 If the draft exceeds 280 characters, you'll be prompted to re-edit or cancel.
+
+## Auth Behavior
+
+- OAuth2 user token is preferred for posting.
+- With `--media`, OAuth2 user token is required (`media.write` scope).
+- For text-only posts, if OAuth2 is unavailable, the CLI can fall back to OAuth1 credentials.
 
 ## CLI Flags
 
