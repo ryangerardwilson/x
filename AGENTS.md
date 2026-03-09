@@ -27,6 +27,6 @@
 - Keep output plain-text and deterministic.
 
 ## Repo Guardrails
-- `_version.py` remains the single source of runtime version.
+- `_version.py` remains the single runtime version module, but release numbers must be injected by CI from tags rather than hand-edited in git.
 - `install.sh` may keep conventional long installer flags, but user-facing app hints should reference the canonical app flags.
 - Keep runtime logic small and local unless complexity clearly justifies another module.
