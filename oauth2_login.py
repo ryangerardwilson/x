@@ -11,6 +11,11 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+try:
+    import charset_normalizer  # noqa: F401
+except Exception:
+    charset_normalizer = None
+
 import requests
 
 AUTH_URL = "https://x.com/i/oauth2/authorize"

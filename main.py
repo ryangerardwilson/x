@@ -11,6 +11,11 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+try:
+    import charset_normalizer  # noqa: F401
+except Exception:
+    charset_normalizer = None
+
 import requests
 try:
     from requests_oauthlib import OAuth1
