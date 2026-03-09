@@ -12,22 +12,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 try:
-    from xdk import Client as XdkClient
-    from xdk.media.models import (
-        AppendUploadRequest,
-        InitializeUploadRequest,
-        UploadRequest,
-    )
-    from xdk.posts.models import CreateRequest, CreateRequestMedia
-except ImportError:
-    XdkClient = None
-    AppendUploadRequest = None
-    InitializeUploadRequest = None
-    UploadRequest = None
-    CreateRequest = None
-    CreateRequestMedia = None
-
-try:
     from _version import __version__
 except Exception:
     __version__ = "0.0.0"
@@ -70,6 +54,27 @@ def _oauth1_class():
     except ImportError:
         return None
     return OAuth1
+
+
+def _xdk_symbols():
+    try:
+        from xdk import Client as XdkClient
+        from xdk.media.models import (
+            AppendUploadRequest,
+            InitializeUploadRequest,
+            UploadRequest,
+        )
+        from xdk.posts.models import CreateRequest, CreateRequestMedia
+    except ImportError:
+        return None
+    return (
+        XdkClient,
+        AppendUploadRequest,
+        InitializeUploadRequest,
+        UploadRequest,
+        CreateRequest,
+        CreateRequestMedia,
+    )
 
 
 def build_auth():
@@ -256,10 +261,12 @@ def _run_oauth2_login_helper():
 
 
 def _build_xdk_client(access_token):
-    if XdkClient is None:
+    xdk_symbols = _xdk_symbols()
+    if xdk_symbols is None:
         raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
     if not access_token:
         raise RuntimeError("Missing OAuth2 user access token for XDK client.")
+    XdkClient = xdk_symbols[0]
     return XdkClient(access_token=access_token)
 
 
@@ -436,6 +443,11 @@ def _wait_for_media_processing(media_client, media_id, processing_info):
 
 
 def _chunked_media_upload(media_client, media_path, media_type, media_category):
+    xdk_symbols = _xdk_symbols()
+    if xdk_symbols is None:
+        raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
+    AppendUploadRequest = xdk_symbols[1]
+    InitializeUploadRequest = xdk_symbols[2]
     total_bytes = os.path.getsize(media_path)
     init_response = _xdk_call_with_retries(
         media_client.initialize_upload,
@@ -480,6 +492,10 @@ def _chunked_media_upload(media_client, media_path, media_type, media_category):
 
 
 def upload_media(xdk_client, media_path):
+    xdk_symbols = _xdk_symbols()
+    if xdk_symbols is None:
+        raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
+    UploadRequest = xdk_symbols[3]
     media_path = os.path.expanduser(media_path)
     if not os.path.isfile(media_path):
         raise RuntimeError(f"Media file not found: {media_path}")
@@ -514,6 +530,11 @@ def upload_media(xdk_client, media_path):
 
 def post_tweet(auth, headers, text, media_ids=None, xdk_client=None):
     if xdk_client is not None:
+        xdk_symbols = _xdk_symbols()
+        if xdk_symbols is None:
+            raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
+        CreateRequest = xdk_symbols[4]
+        CreateRequestMedia = xdk_symbols[5]
         body = CreateRequest()
         if text:
             body.text = text
