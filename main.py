@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -24,6 +25,17 @@ MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
+
+
+class _HttpResponse:
+    def __init__(self, status_code, headers, body_bytes):
+        self.status_code = status_code
+        self.headers = headers
+        self._body = body_bytes
+        self.text = body_bytes.decode("utf-8", errors="replace")
+
+    def json(self):
+        return json.loads(self.text)
 
 
 def _default_oauth2_token_file():
@@ -191,7 +203,6 @@ def _extract_access_token(payload):
 
 
 def _refresh_oauth2_access_token(token_file, payload):
-    requests = _requests_module()
     token_obj = payload.get("token") if isinstance(payload.get("token"), dict) else {}
     refresh_token = (
         get_env("X_OAUTH2_REFRESH_TOKEN", "TWITTER_OAUTH2_REFRESH_TOKEN")
@@ -218,10 +229,16 @@ def _refresh_oauth2_access_token(token_file, payload):
         "client_id": client_id,
     }
 
+    encoded = urllib.parse.urlencode(data).encode("utf-8")
+    request = Request(X_OAUTH2_TOKEN_URL, data=encoded, headers=headers, method="POST")
     try:
-        response = requests.post(X_OAUTH2_TOKEN_URL, headers=headers, data=data, timeout=30)
-    except requests.RequestException:
+        with urlopen(request, timeout=30) as response:
+            body = response.read()
+            status_code = response.getcode()
+            response_headers = response.headers
+    except (HTTPError, URLError, TimeoutError, OSError):
         return None
+    response = _HttpResponse(status_code, response_headers, body)
     if response.status_code < 200 or response.status_code >= 300:
         return None
 
@@ -350,7 +367,51 @@ def _xdk_call_with_retries(method, *args, retries=MEDIA_UPLOAD_RETRIES, **kwargs
             time.sleep(min(2 ** attempt, 16))
 
 
+def _urllib_request(method, url, headers=None, json_body=None, form_body=None, timeout=30):
+    request_headers = dict(headers or {})
+    body = None
+    if json_body is not None:
+        body = json.dumps(json_body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+    elif form_body is not None:
+        body = urllib.parse.urlencode(form_body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+
+    request = Request(url, data=body, headers=request_headers, method=method.upper())
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return _HttpResponse(response.getcode(), response.headers, response.read())
+    except HTTPError as exc:
+        return _HttpResponse(exc.code, exc.headers, exc.read())
+
+
 def _request_with_retries(method, url, auth=None, headers=None, retries=4, **kwargs):
+    if auth is None:
+        timeout = kwargs.get("timeout", 30)
+        json_body = kwargs.get("json")
+        form_body = kwargs.get("data")
+        for attempt in range(retries + 1):
+            try:
+                response = _urllib_request(
+                    method,
+                    url,
+                    headers=headers,
+                    json_body=json_body,
+                    form_body=form_body,
+                    timeout=timeout,
+                )
+            except (URLError, TimeoutError, OSError):
+                if attempt == retries:
+                    raise
+                time.sleep(min(2 ** attempt, 16))
+                continue
+            if response.status_code not in RETRYABLE_STATUS_CODES:
+                return response
+            if attempt == retries:
+                return response
+            time.sleep(_retry_delay_seconds(response, attempt))
+        return response
+
     requests = _requests_module()
     for attempt in range(retries + 1):
         response = requests.request(method, url, auth=auth, headers=headers, **kwargs)
@@ -808,7 +869,8 @@ def main():
     xdk_client = None
     if oauth2_user_token:
         headers = {"Authorization": f"Bearer {oauth2_user_token}"}
-        xdk_client = _build_xdk_client(oauth2_user_token)
+        if media_path:
+            xdk_client = _build_xdk_client(oauth2_user_token)
     elif media_path:
         raise SystemExit(
             "Media posting requires a valid OAuth 2.0 user access token with media.write."

@@ -10,6 +10,8 @@ import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 AUTH_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
@@ -33,13 +35,6 @@ def _env(name, fallback=None):
     if fallback:
         return os.getenv(fallback)
     return None
-
-
-def _requests_module():
-    import requests
-
-    return requests
-
 
 def _pkce_pair():
     verifier = base64.urlsafe_b64encode(os.urandom(64)).decode("utf-8").rstrip("=")
@@ -104,7 +99,6 @@ def _extract_code_from_callback_input(value):
 def _exchange_code_for_token(
     client_id, redirect_uri, code_verifier, code, client_secret=None
 ):
-    requests = _requests_module()
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     if client_secret:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode(
@@ -119,12 +113,21 @@ def _exchange_code_for_token(
         "redirect_uri": redirect_uri,
         "code_verifier": code_verifier,
     }
-    response = requests.post(TOKEN_URL, headers=headers, data=data, timeout=30)
-    if response.status_code < 200 or response.status_code >= 300:
-        raise RuntimeError(
-            f"Token exchange failed ({response.status_code}): {response.text.strip()}"
-        )
-    token = response.json()
+    encoded = urllib.parse.urlencode(data).encode("utf-8")
+    request = Request(TOKEN_URL, data=encoded, headers=headers, method="POST")
+    try:
+        with urlopen(request, timeout=30) as response:
+            status_code = response.getcode()
+            body = response.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Token exchange failed ({exc.code}): {body.strip()}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Token exchange failed: {exc}") from exc
+
+    if status_code < 200 or status_code >= 300:
+        raise RuntimeError(f"Token exchange failed ({status_code}): {body.strip()}")
+    token = json.loads(body)
     expires_in = int(token.get("expires_in") or 0)
     if expires_in > 0:
         token["expires_at"] = int(time.time()) + expires_in
