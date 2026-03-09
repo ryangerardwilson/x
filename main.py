@@ -8,19 +8,19 @@ import subprocess
 import sys
 import tempfile
 import time
-import warnings
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+try:
+    import chardet  # noqa: F401
+except Exception:
+    chardet = None
 
 try:
     import charset_normalizer  # noqa: F401
 except Exception:
     charset_normalizer = None
 
-warnings.filterwarnings(
-    "ignore",
-    message="Unable to find acceptable character detection dependency .*",
-)
 import requests
 try:
     from requests_oauthlib import OAuth1
