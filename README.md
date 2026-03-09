@@ -4,10 +4,13 @@ Minimal CLI to post to X from the command line.
 
 ## Setup
 
-Install dependencies:
+Source install:
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+python main.py -h
 ```
 
 Set your X OAuth2 app credentials (for PKCE login):
@@ -44,7 +47,7 @@ Or let `main.py` do it automatically: when no valid token is found, it launches 
 By default tokens are saved to:
 
 ```text
-~/.x/oauth2_token.json
+~/.local/share/x/tokens/oauth2_token.json
 ```
 
 You can also provide a token directly instead of login:
@@ -78,7 +81,7 @@ python main.py "hello, world" /path/to/image-or-video
 or:
 
 ```bash
-python main.py "hello, world" --media /path/to/image-or-video
+python main.py -m /path/to/image-or-video "hello, world"
 ```
 
 Compose in Vim:
@@ -92,16 +95,17 @@ If the draft exceeds 280 characters, you'll be prompted to re-edit or cancel.
 ## Auth Behavior
 
 - OAuth2 user token is preferred for posting.
-- With `--media`, OAuth2 user token is required (`media.write` scope).
+- With `-m`, OAuth2 user token is required (`media.write` scope).
 - For text-only posts, if OAuth2 is unavailable, the CLI can fall back to OAuth1 credentials.
 
 ## CLI Flags
 
-- `-e`, `--edit`: Open Vim to compose a post.
-- `-m`, `--media`: Attach an image, GIF, or video from a local file path.
-- `-v`, `--version`: Print version and exit.
-- `-u`, `--upgrade`: Upgrade via the installer script.
-- `-h`, `--help`: Show help.
+- `-e`: Open `$VISUAL`, then `$EDITOR`, then `vim` to compose a post.
+- `-m`: Attach an image, GIF, or video from a local file path.
+- `-ea`: Ensure OAuth2 token is valid and exit.
+- `-v`: Print version and exit.
+- `-u`: Upgrade via the installer script.
+- `-h`: Show help.
 
 ## Install (binary release)
 

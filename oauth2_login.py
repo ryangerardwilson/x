@@ -17,7 +17,15 @@ AUTH_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
 DEFAULT_SCOPES = "tweet.read tweet.write users.read media.write offline.access"
 DEFAULT_REDIRECT_URI = "https://callback-omega-one.vercel.app/callback/x"
-DEFAULT_TOKEN_FILE = "~/.x/oauth2_token.json"
+
+
+def _default_token_file():
+    data_home = os.getenv("XDG_DATA_HOME")
+    if data_home:
+        base = os.path.expanduser(data_home)
+    else:
+        base = os.path.expanduser("~/.local/share")
+    return os.path.join(base, "x", "tokens", "oauth2_token.json")
 
 
 def _env(name, fallback=None):
@@ -153,7 +161,7 @@ def main():
     )
     parser.add_argument(
         "--token-file",
-        default=_env("X_OAUTH2_TOKEN_FILE") or DEFAULT_TOKEN_FILE,
+        default=_env("X_OAUTH2_TOKEN_FILE") or _default_token_file(),
         help="Where to store token JSON.",
     )
     parser.add_argument(

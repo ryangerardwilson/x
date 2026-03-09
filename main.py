@@ -12,14 +12,26 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import requests
-from requests_oauthlib import OAuth1
-from xdk import Client as XdkClient
-from xdk.media.models import (
-    AppendUploadRequest,
-    InitializeUploadRequest,
-    UploadRequest,
-)
-from xdk.posts.models import CreateRequest, CreateRequestMedia
+try:
+    from requests_oauthlib import OAuth1
+except ImportError:
+    OAuth1 = None
+
+try:
+    from xdk import Client as XdkClient
+    from xdk.media.models import (
+        AppendUploadRequest,
+        InitializeUploadRequest,
+        UploadRequest,
+    )
+    from xdk.posts.models import CreateRequest, CreateRequestMedia
+except ImportError:
+    XdkClient = None
+    AppendUploadRequest = None
+    InitializeUploadRequest = None
+    UploadRequest = None
+    CreateRequest = None
+    CreateRequestMedia = None
 
 try:
     from _version import __version__
@@ -32,7 +44,13 @@ X_OAUTH2_TOKEN_URL = "https://api.x.com/2/oauth2/token"
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
 MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-DEFAULT_OAUTH2_TOKEN_FILE = "~/.x/oauth2_token.json"
+def _default_oauth2_token_file():
+    data_home = os.getenv("XDG_DATA_HOME")
+    if data_home:
+        base = os.path.expanduser(data_home)
+    else:
+        base = os.path.expanduser("~/.local/share")
+    return os.path.join(base, "x", "tokens", "oauth2_token.json")
 
 
 def get_env(name, fallback_name=None):
@@ -45,6 +63,8 @@ def get_env(name, fallback_name=None):
 
 
 def build_auth():
+    if OAuth1 is None:
+        raise RuntimeError("Missing dependency: requests-oauthlib. Install requirements.txt first.")
     consumer_key = get_env("X_CONSUMER_KEY", "TWITTER_CONSUMER_KEY")
     consumer_secret = get_env("X_CONSUMER_SECRET", "TWITTER_CONSUMER_SECRET")
     access_token = get_env("X_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN")
@@ -74,9 +94,34 @@ def build_auth():
 def _oauth2_token_file_path():
     token_file = (
         get_env("X_OAUTH2_TOKEN_FILE", "TWITTER_OAUTH2_TOKEN_FILE")
-        or DEFAULT_OAUTH2_TOKEN_FILE
+        or _default_oauth2_token_file()
     )
     return os.path.expanduser(token_file)
+
+
+def print_usage():
+    print(
+        "Usage:\n"
+        "  x \"post text\"\n"
+        "  x -m /path/to/media \"post text\"\n"
+        "  x -e\n"
+        "  x -ea\n"
+        "  x -v\n"
+        "  x -u\n"
+        "\n"
+        "Options:\n"
+        "  -e            Compose a post in $VISUAL/$EDITOR\n"
+        "  -m <path>     Attach an image, GIF, or video\n"
+        "  -ea           Ensure OAuth2 token is valid and exit\n"
+        "  -h            Show this help\n"
+        "  -v            Print version\n"
+        "  -u            Upgrade if a newer release is available\n"
+        "\n"
+        "Auth:\n"
+        f"  OAuth2 token file: {_oauth2_token_file_path()}\n"
+        "  Env overrides: X_USER_ACCESS_TOKEN, X_OAUTH2_USER_TOKEN, X_BEARER_TOKEN\n"
+        "  Text-only fallback: X_CONSUMER_KEY, X_CONSUMER_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET\n"
+    )
 
 
 def _load_oauth2_token_payload():
@@ -199,6 +244,8 @@ def _run_oauth2_login_helper():
 
 
 def _build_xdk_client(access_token):
+    if XdkClient is None:
+        raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
     if not access_token:
         raise RuntimeError("Missing OAuth2 user access token for XDK client.")
     return XdkClient(access_token=access_token)
@@ -596,7 +643,7 @@ def read_from_vim():
 
     try:
         while True:
-            editor = os.getenv("EDITOR", "vim").strip()
+            editor = (os.getenv("VISUAL") or os.getenv("EDITOR") or "vim").strip()
             editor_cmd = shlex.split(editor) if editor else ["vim"]
             if not editor_cmd:
                 editor_cmd = ["vim"]
@@ -631,7 +678,7 @@ def main():
     args = parser.parse_args()
 
     if args.help_flag:
-        parser.print_help()
+        print_usage()
         return
 
     if args.version:
@@ -698,7 +745,7 @@ def main():
         text = " ".join(text_parts).strip()
 
     if not text and not media_path:
-        parser.print_help()
+        print_usage()
         return
 
     oauth2_user_token = get_user_access_token(auto_refresh=True)

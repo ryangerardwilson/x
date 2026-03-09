@@ -1,48 +1,32 @@
-# Repository Guidelines
+# x Agent Guide
 
-## Project Structure & Module Organization
-- `main.py`: primary CLI entrypoint (`argparse`), tweet posting logic, editor flow, and self-upgrade behavior.
-- `_version.py`: single source for runtime version string.
-- `requirements.txt`: pinned runtime Python dependencies.
-- `install.sh`: Linux installer used by end users and upgrade path.
-- `.github/workflows/release.yml`: tag-driven release pipeline; builds `x-linux-x64.tar.gz`.
-- `.github/scripts/find-python-url.py`: helper script used during release image build.
+## Scope
+- `x` is a single-purpose terminal CLI for publishing to X.
+- Keep the interface keyboard-first and explicit. Do not turn this repo into a generic social scheduler or GUI wrapper.
+- Supported primary flows are: text post, media post, editor compose, auth check, version, and self-upgrade.
 
-Keep new runtime logic in small functions in `main.py` unless complexity justifies splitting into modules.
+## CLI Contract
+- Canonical app flags are short only: `-h`, `-v`, `-u`, `-e`, `-m`, `-ea`.
+- `x` with no content should print the same help text as `x -h`.
+- Help output must include concrete examples and must not document GNU-style long flags for the app itself.
+- Preserve the current publish grammar:
+  - `x "text"`
+  - `x -m /path/to/file "text"`
+  - `x "text" /path/to/file`
+- Success output should stay terse and include the posted id.
 
-## Build, Test, and Development Commands
-- `python -m venv .venv && source .venv/bin/activate`: create and activate a local environment.
-- `pip install -r requirements.txt`: install runtime dependencies.
-- `python main.py --help`: verify CLI argument parsing and flags.
-- `python main.py --version`: check local version wiring.
-- `python main.py "hello"`: manual post flow test (requires `X_*` env vars).
-- `bash install.sh --help`: validate installer options.
+## Auth And Storage
+- Default OAuth2 token storage must use XDG data paths, currently `~/.local/share/x/tokens/oauth2_token.json` unless `XDG_DATA_HOME` or explicit env overrides are set.
+- Keep environment overrides working for operators.
+- Do not reintroduce default token storage under `~/.x/`.
+- Text-only fallback via OAuth1 env vars is supported and should remain explicit in help/docs.
 
-Release builds are handled by GitHub Actions on tags matching `v*` (for example, `v0.1.0`).
+## Editing And UX
+- Editor resolution order is `$VISUAL`, then `$EDITOR`, then `vim`.
+- Error messages should reference only canonical short flags.
+- Keep output plain-text and deterministic.
 
-## Coding Style & Naming Conventions
-- Follow PEP 8 with 4-space indentation and clear function names (`snake_case`).
-- Prefer small, single-purpose functions and explicit error messages.
-- Constants should be uppercase (`INSTALL_URL`, `LATEST_RELEASE_API`).
-- Shell scripts should use `set -euo pipefail` and long, descriptive variable names.
-
-## Testing Guidelines
-- No automated test suite is currently configured.
-- For code changes, run targeted manual checks:
-  - CLI parse/help/version paths.
-  - `-e` editor flow and 280-character guard behavior.
-  - Failure messages for missing credentials.
-- If adding tests, use `pytest` under `tests/` with names like `test_<feature>.py`.
-
-## Commit & Pull Request Guidelines
-- Current history uses short messages like `sync`; prefer clearer imperative subjects going forward (example: `fix upgrade version comparison`).
-- Keep commits focused and logically grouped.
-- PRs should include:
-  - What changed and why.
-  - How it was validated (commands run).
-  - Related issue links, if any.
-  - CLI output snippets for behavior changes.
-
-## Security & Configuration Tips
-- Never commit `X_CONSUMER_KEY`, `X_CONSUMER_SECRET`, `X_ACCESS_TOKEN`, or `X_ACCESS_TOKEN_SECRET`.
-- Use environment variables locally; avoid hardcoded secrets in code or scripts.
+## Repo Guardrails
+- `_version.py` remains the single source of runtime version.
+- `install.sh` may keep conventional long installer flags, but user-facing app hints should reference the canonical app flags.
+- Keep runtime logic small and local unless complexity clearly justifies another module.
