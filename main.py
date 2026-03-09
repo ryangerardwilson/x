@@ -8,9 +8,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.parse
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 try:
     from _version import __version__
@@ -95,6 +92,19 @@ def _xdk_symbols():
         CreateRequest,
         CreateRequestMedia,
     )
+
+
+def _urllib_parse():
+    import urllib.parse
+
+    return urllib.parse
+
+
+def _urllib_request_symbols():
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    return Request, urlopen, HTTPError, URLError
 
 
 def build_auth():
@@ -211,6 +221,8 @@ def _extract_access_token(payload):
 
 
 def _refresh_oauth2_access_token(token_file, payload):
+    urllib_parse = _urllib_parse()
+    Request, urlopen, HTTPError, URLError = _urllib_request_symbols()
     token_obj = payload.get("token") if isinstance(payload.get("token"), dict) else {}
     refresh_token = (
         get_env("X_OAUTH2_REFRESH_TOKEN", "TWITTER_OAUTH2_REFRESH_TOKEN")
@@ -237,7 +249,7 @@ def _refresh_oauth2_access_token(token_file, payload):
         "client_id": client_id,
     }
 
-    encoded = urllib.parse.urlencode(data).encode("utf-8")
+    encoded = urllib_parse.urlencode(data).encode("utf-8")
     request = Request(X_OAUTH2_TOKEN_URL, data=encoded, headers=headers, method="POST")
     try:
         with urlopen(request, timeout=30) as response:
@@ -376,13 +388,15 @@ def _xdk_call_with_retries(method, *args, retries=MEDIA_UPLOAD_RETRIES, **kwargs
 
 
 def _urllib_request(method, url, headers=None, json_body=None, form_body=None, timeout=30):
+    urllib_parse = _urllib_parse()
+    Request, urlopen, HTTPError, _ = _urllib_request_symbols()
     request_headers = dict(headers or {})
     body = None
     if json_body is not None:
         body = json.dumps(json_body).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json")
     elif form_body is not None:
-        body = urllib.parse.urlencode(form_body).encode("utf-8")
+        body = urllib_parse.urlencode(form_body).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
 
     request = Request(url, data=body, headers=request_headers, method=method.upper())
@@ -395,6 +409,7 @@ def _urllib_request(method, url, headers=None, json_body=None, form_body=None, t
 
 def _request_with_retries(method, url, auth=None, headers=None, retries=4, **kwargs):
     if auth is None:
+        _, _, _, URLError = _urllib_request_symbols()
         timeout = kwargs.get("timeout", 30)
         json_body = kwargs.get("json")
         form_body = kwargs.get("data")
@@ -698,6 +713,7 @@ def _is_version_newer(candidate, current):
 
 
 def _get_latest_version(timeout=5.0):
+    Request, urlopen, HTTPError, URLError = _urllib_request_symbols()
     try:
         request = Request(LATEST_RELEASE_API, headers={"User-Agent": "x-updater"})
         with urlopen(request, timeout=timeout) as resp:
