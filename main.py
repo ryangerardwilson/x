@@ -12,17 +12,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 try:
-    import chardet  # noqa: F401
-except Exception:
-    chardet = None
-
-try:
-    import charset_normalizer  # noqa: F401
-except Exception:
-    charset_normalizer = None
-
-import requests
-try:
     from requests_oauthlib import OAuth1
 except ImportError:
     OAuth1 = None
@@ -54,6 +43,8 @@ X_OAUTH2_TOKEN_URL = "https://api.x.com/2/oauth2/token"
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
 MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
 def _default_oauth2_token_file():
     data_home = os.getenv("XDG_DATA_HOME")
     if data_home:
@@ -70,6 +61,12 @@ def get_env(name, fallback_name=None):
     if fallback_name:
         return os.getenv(fallback_name)
     return None
+
+
+def _requests_module():
+    import requests
+
+    return requests
 
 
 def build_auth():
@@ -175,6 +172,7 @@ def _extract_access_token(payload):
 
 
 def _refresh_oauth2_access_token(token_file, payload):
+    requests = _requests_module()
     token_obj = payload.get("token") if isinstance(payload.get("token"), dict) else {}
     refresh_token = (
         get_env("X_OAUTH2_REFRESH_TOKEN", "TWITTER_OAUTH2_REFRESH_TOKEN")
@@ -306,6 +304,7 @@ def _retry_delay_seconds(response, attempt):
 
 
 def _xdk_call_with_retries(method, *args, retries=MEDIA_UPLOAD_RETRIES, **kwargs):
+    requests = _requests_module()
     for attempt in range(retries + 1):
         try:
             return method(*args, **kwargs)
@@ -331,6 +330,7 @@ def _xdk_call_with_retries(method, *args, retries=MEDIA_UPLOAD_RETRIES, **kwargs
 
 
 def _request_with_retries(method, url, auth=None, headers=None, retries=4, **kwargs):
+    requests = _requests_module()
     for attempt in range(retries + 1):
         response = requests.request(method, url, auth=auth, headers=headers, **kwargs)
         if response.status_code not in RETRYABLE_STATUS_CODES:

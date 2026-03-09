@@ -11,18 +11,6 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-try:
-    import chardet  # noqa: F401
-except Exception:
-    chardet = None
-
-try:
-    import charset_normalizer  # noqa: F401
-except Exception:
-    charset_normalizer = None
-
-import requests
-
 AUTH_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
 DEFAULT_SCOPES = "tweet.read tweet.write users.read media.write offline.access"
@@ -45,6 +33,12 @@ def _env(name, fallback=None):
     if fallback:
         return os.getenv(fallback)
     return None
+
+
+def _requests_module():
+    import requests
+
+    return requests
 
 
 def _pkce_pair():
@@ -110,6 +104,7 @@ def _extract_code_from_callback_input(value):
 def _exchange_code_for_token(
     client_id, redirect_uri, code_verifier, code, client_secret=None
 ):
+    requests = _requests_module()
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     if client_secret:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode(
