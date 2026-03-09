@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+import warnings
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 try:
@@ -16,6 +17,10 @@ try:
 except Exception:
     charset_normalizer = None
 
+warnings.filterwarnings(
+    "ignore",
+    message="Unable to find acceptable character detection dependency .*",
+)
 import requests
 
 AUTH_URL = "https://x.com/i/oauth2/authorize"
