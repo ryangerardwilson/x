@@ -153,11 +153,6 @@ def print_usage():
         "  -h            Show this help\n"
         "  -v            Print version\n"
         "  -u            Upgrade if a newer release is available\n"
-        "\n"
-        "Auth:\n"
-        f"  OAuth2 token file: {_oauth2_token_file_path()}\n"
-        "  Env overrides: X_USER_ACCESS_TOKEN, X_OAUTH2_USER_TOKEN, X_BEARER_TOKEN\n"
-        "  Text-only fallback: X_CONSUMER_KEY, X_CONSUMER_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET\n"
         )
     )
 
