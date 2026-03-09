@@ -12,11 +12,6 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 try:
-    from requests_oauthlib import OAuth1
-except ImportError:
-    OAuth1 = None
-
-try:
     from xdk import Client as XdkClient
     from xdk.media.models import (
         AppendUploadRequest,
@@ -69,7 +64,16 @@ def _requests_module():
     return requests
 
 
+def _oauth1_class():
+    try:
+        from requests_oauthlib import OAuth1
+    except ImportError:
+        return None
+    return OAuth1
+
+
 def build_auth():
+    OAuth1 = _oauth1_class()
     if OAuth1 is None:
         raise RuntimeError("Missing dependency: requests-oauthlib. Install requirements.txt first.")
     consumer_key = get_env("X_CONSUMER_KEY", "TWITTER_CONSUMER_KEY")
