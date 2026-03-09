@@ -6,13 +6,15 @@
 - Supported primary flows are: text post, media post, editor compose, auth check, version, and self-upgrade.
 
 ## CLI Contract
-- Canonical app flags are short only: `-h`, `-v`, `-u`, `-e`, `-m`, `-ea`.
+- Canonical app flags are short only: `-h`, `-v`, `-u`, `-e`, `-m`.
 - `x` with no content should print the same help text as `x -h`.
 - Help output must include concrete examples and must not document GNU-style long flags for the app itself.
 - Preserve the current publish grammar:
-  - `x "text"`
-  - `x -m /path/to/file "text"`
-  - `x "text" /path/to/file`
+  - `x p "text"`
+  - `x p "text" -m /path/to/file`
+  - `x p -e`
+  - `x p -m /path/to/file -e`
+- Auth check grammar is `x ea`.
 - Success output should stay terse and include the posted id.
 
 ## Auth And Storage

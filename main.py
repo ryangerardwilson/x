@@ -138,21 +138,34 @@ def _oauth2_token_file_path():
 def print_usage():
     print(
         _muted_text(
-        "Usage:\n"
-        "  x \"post text\"\n"
-        "  x -m /path/to/media \"post text\"\n"
-        "  x -e\n"
-        "  x -ea\n"
-        "  x -v\n"
-        "  x -u\n"
+        "X CLI\n"
+        "publish to X from the terminal\n"
         "\n"
-        "Options:\n"
-        "  -e            Compose a post in $VISUAL/$EDITOR\n"
-        "  -m <path>     Attach an image, GIF, or video\n"
-        "  -ea           Ensure OAuth2 token is valid and exit\n"
-        "  -h            Show this help\n"
-        "  -v            Print version\n"
-        "  -u            Upgrade if a newer release is available\n"
+        "flags:\n"
+        "  x -h\n"
+        "    show this help\n"
+        "  x -v\n"
+        "    print the installed version\n"
+        "  x -u\n"
+        "    upgrade to the latest release\n"
+        "\n"
+        "features:\n"
+        "  publish text directly\n"
+        "  # x p <text>\n"
+        "  x p \"ship the patch\"\n"
+        "\n"
+        "  publish with media using the canonical media flag\n"
+        "  # x p <text> -m <path>\n"
+        "  x p \"ship the patch\" -m ~/media/demo.mp4\n"
+        "\n"
+        "  compose in the editor resolved from $VISUAL, then $EDITOR, then vim\n"
+        "  # x p -e | x p -m <path> -e\n"
+        "  x p -e\n"
+        "  x p -m ~/media/demo.mp4 -e\n"
+        "\n"
+        "  validate OAuth2 auth and exit\n"
+        "  # x ea\n"
+        "  x ea\n"
         )
     )
 
@@ -633,27 +646,25 @@ def post_tweet(auth, headers, text, media_ids=None, xdk_client=None):
     return response.json()
 
 
-def build_parser():
+def build_top_level_parser():
     parser = argparse.ArgumentParser(
         description="Post to X from the command line.",
         add_help=False,
     )
     parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
-    parser.add_argument(
-        "text",
-        nargs="*",
-        help="Post text. If omitted, use -e to open Vim.",
-    )
-    parser.add_argument("-m", dest="media", help="Path to an image/GIF/video to attach.")
-    parser.add_argument("-e", dest="edit", action="store_true", help="Open Vim to compose the post.")
-    parser.add_argument(
-        "-ea",
-        dest="ensure_auth",
-        action="store_true",
-        help="Ensure OAuth2 token is valid (refresh/login if needed) and exit.",
-    )
     parser.add_argument("-v", dest="version", action="store_true", help="Show version and exit.")
     parser.add_argument("-u", dest="upgrade", action="store_true", help="Upgrade to the latest version.")
+    parser.add_argument("command", nargs="?", help="Command: p or ea.")
+    parser.add_argument("command_args", nargs=argparse.REMAINDER)
+    return parser
+
+
+def build_publish_parser():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
+    parser.add_argument("-m", dest="media", help="Path to an image/GIF/video to attach.")
+    parser.add_argument("-e", dest="edit", action="store_true", help="Open Vim to compose the post.")
+    parser.add_argument("text", nargs="*", help="Post text. If omitted, use -e to open Vim.")
     return parser
 
 
@@ -775,7 +786,7 @@ def read_from_vim():
 
 
 def main():
-    parser = build_parser()
+    parser = build_top_level_parser()
     args = parser.parse_args()
 
     if args.help_flag:
@@ -787,7 +798,7 @@ def main():
         return
 
     if args.upgrade:
-        if args.text or args.edit or args.media:
+        if args.command or args.command_args:
             raise SystemExit("Use -u by itself to upgrade.")
 
         latest = _get_latest_version()
@@ -814,7 +825,13 @@ def main():
         rc = _run_upgrade()
         sys.exit(rc)
 
-    if args.ensure_auth:
+    if not args.command:
+        print_usage()
+        return
+
+    if args.command == "ea":
+        if args.command_args:
+            raise SystemExit("Usage: x ea")
         oauth2_user_token = get_user_access_token(auto_refresh=True)
         if not oauth2_user_token:
             print(
@@ -829,20 +846,26 @@ def main():
         print("X OAuth2 token is ready.")
         return
 
-    if args.edit:
-        text_parts = list(args.text)
-        media_path = args.media
-        if media_path is None and text_parts and os.path.isfile(text_parts[-1]):
-            media_path = text_parts.pop()
+    if args.command != "p":
+        raise SystemExit("Usage: x p <text> [-m <path>] | x p -e [-m <path>] | x ea")
+
+    publish_parser = build_publish_parser()
+    parse_publish = getattr(publish_parser, "parse_intermixed_args", publish_parser.parse_args)
+    publish_args = parse_publish(args.command_args)
+
+    if publish_args.help_flag:
+        print_usage()
+        return
+
+    if publish_args.edit:
+        text_parts = list(publish_args.text)
+        media_path = publish_args.media
         if text_parts:
-            raise SystemExit("Use either -e or provide text, not both.")
+            raise SystemExit("Use `x p -e` without inline text.")
         text = read_from_vim()
     else:
-        text_parts = list(args.text)
-        media_path = args.media
-        # Allow: python main.py "text" /path/to/media.mp4
-        if media_path is None and text_parts and os.path.isfile(text_parts[-1]):
-            media_path = text_parts.pop()
+        text_parts = list(publish_args.text)
+        media_path = publish_args.media
         text = " ".join(text_parts).strip()
 
     if not text and not media_path:
