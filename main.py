@@ -22,6 +22,8 @@ X_OAUTH2_TOKEN_URL = "https://api.x.com/2/oauth2/token"
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
 MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+ANSI_RESET = "\033[0m"
+ANSI_GRAY = "\033[38;5;245m"
 
 
 def _default_oauth2_token_file():
@@ -31,6 +33,12 @@ def _default_oauth2_token_file():
     else:
         base = os.path.expanduser("~/.local/share")
     return os.path.join(base, "x", "tokens", "oauth2_token.json")
+
+
+def _muted_text(text):
+    if not sys.stdout.isatty() or "NO_COLOR" in os.environ:
+        return text
+    return f"{ANSI_GRAY}{text}{ANSI_RESET}"
 
 
 def get_env(name, fallback_name=None):
@@ -117,6 +125,7 @@ def _oauth2_token_file_path():
 
 def print_usage():
     print(
+        _muted_text(
         "Usage:\n"
         "  x \"post text\"\n"
         "  x -m /path/to/media \"post text\"\n"
@@ -137,6 +146,7 @@ def print_usage():
         f"  OAuth2 token file: {_oauth2_token_file_path()}\n"
         "  Env overrides: X_USER_ACCESS_TOKEN, X_OAUTH2_USER_TOKEN, X_BEARER_TOKEN\n"
         "  Text-only fallback: X_CONSUMER_KEY, X_CONSUMER_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET\n"
+        )
     )
 
 
