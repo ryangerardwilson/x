@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 AUTH_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
-DEFAULT_SCOPES = "tweet.read tweet.write users.read media.write offline.access"
+DEFAULT_SCOPES = "tweet.read tweet.write users.read media.write bookmark.read bookmark.write offline.access"
 DEFAULT_REDIRECT_URI = "https://callback-omega-one.vercel.app/callback/x"
 
 

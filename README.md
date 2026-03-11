@@ -1,6 +1,6 @@
 # x
 
-Minimal terminal CLI for publishing to X.
+Terminal CLI for publishing to X and handling bookmark-driven reply flows.
 
 ## Install
 
@@ -56,6 +56,12 @@ Also accepted: `X_OAUTH2_USER_TOKEN`, `X_BEARER_TOKEN`.
 
 Optional text-only fallback: `X_CONSUMER_KEY`, `X_CONSUMER_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`, or `TWITTER_*`.
 
+For bookmark-driven reply flows, the token needs:
+
+```text
+tweet.read tweet.write users.read media.write bookmark.read bookmark.write offline.access
+```
+
 ## Usage
 
 ```text
@@ -80,9 +86,24 @@ features:
   x p -e
   x p -m ~/media/demo.mp4 -e
 
-  validate OAuth2 auth and exit
-  # x ea
+  validate OAuth2 auth and exit, or force token re-issuance
+  # x ea [-r]
   x ea
+  x ea -r
+
+  list bookmarked posts for reply workflows
+  # x b ls [-j] [-n <count>]
+  x b ls
+  x b ls -j -n 20
+
+  remove a bookmark after you have handled it
+  # x b rm <tweet_id>
+  x b rm 1894451234567890123
+
+  post a reply to a bookmarked post
+  # x r <tweet_id> <text> | x r <tweet_id> -e
+  x r 1894451234567890123 "The useful test is whether it survives contact with ops."
+  x r 1894451234567890123 -e
 ```
 
 If the draft exceeds 280 characters, the CLI prompts for re-edit or cancel.
@@ -90,6 +111,8 @@ If the draft exceeds 280 characters, the CLI prompts for re-edit or cancel.
 ## Auth Behavior
 
 - OAuth2 user token is preferred for posting.
+- `x ea -r` forces a fresh OAuth2 login and rewrites the saved token.
+- Bookmark lookup and removal require an OAuth2 user token with bookmark scopes.
 - `-m` requires an OAuth2 user token with media scope.
 - Text-only publish can fall back to OAuth1 credentials if OAuth2 is unavailable.
 

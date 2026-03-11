@@ -1,9 +1,9 @@
 # x Agent Guide
 
 ## Scope
-- `x` is a single-purpose terminal CLI for publishing to X.
+- `x` is a terminal CLI for publishing to X and handling the minimal bookmark/reply flows that support `replyguy`.
 - Keep the interface keyboard-first and explicit. Do not turn this repo into a generic social scheduler or GUI wrapper.
-- Supported primary flows are: text post, media post, editor compose, auth check, version, and self-upgrade.
+- Supported primary flows are: text post, media post, editor compose, auth check, bookmark list/remove, reply post, version, and self-upgrade.
 
 ## CLI Contract
 - Canonical app flags are short only: `-h`, `-v`, `-u`, `-e`, `-m`.

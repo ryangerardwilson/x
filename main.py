@@ -81,7 +81,7 @@ def _xdk_symbols():
             InitializeUploadRequest,
             UploadRequest,
         )
-        from xdk.posts.models import CreateRequest, CreateRequestMedia
+        from xdk.posts.models import CreateRequest, CreateRequestMedia, CreateRequestReply
     except ImportError:
         return None
     return (
@@ -91,6 +91,7 @@ def _xdk_symbols():
         UploadRequest,
         CreateRequest,
         CreateRequestMedia,
+        CreateRequestReply,
     )
 
 
@@ -149,7 +150,7 @@ def print_usage():
     print(
         _muted_text(
         "X CLI\n"
-        "publish to X from the terminal\n"
+        "publish to X and manage reply workflows from the terminal\n"
         "\n"
         "flags:\n"
         "  x -h\n"
@@ -173,9 +174,24 @@ def print_usage():
         "  x p -e\n"
         "  x p -m ~/media/demo.mp4 -e\n"
         "\n"
-        "  validate OAuth2 auth and exit\n"
-        "  # x ea\n"
+        "  validate OAuth2 auth and exit, or force token re-issuance\n"
+        "  # x ea [-r]\n"
         "  x ea\n"
+        "  x ea -r\n"
+        "\n"
+        "  list bookmarked posts for reply workflows\n"
+        "  # x b ls [-j] [-n <count>]\n"
+        "  x b ls\n"
+        "  x b ls -j -n 20\n"
+        "\n"
+        "  remove a bookmark after you have handled it\n"
+        "  # x b rm <tweet_id>\n"
+        "  x b rm 1894451234567890123\n"
+        "\n"
+        "  post a reply to a bookmarked post\n"
+        "  # x r <tweet_id> <text> | x r <tweet_id> -e\n"
+        "  x r 1894451234567890123 \"The useful test is whether it survives contact with ops.\"\n"
+        "  x r 1894451234567890123 -e\n"
         )
     )
 
@@ -317,6 +333,22 @@ def _build_xdk_client(access_token):
     return XdkClient(access_token=access_token)
 
 
+def _ensure_oauth2_user_token():
+    oauth2_user_token = get_user_access_token(auto_refresh=True)
+    if oauth2_user_token:
+        return oauth2_user_token
+    print(
+        "No valid OAuth2 user token found. Starting browser login...",
+        file=sys.stderr,
+    )
+    rc = _run_oauth2_login_helper()
+    if rc == 0:
+        oauth2_user_token = get_user_access_token(auto_refresh=True)
+    if not oauth2_user_token:
+        raise SystemExit("OAuth2 token check failed.")
+    return oauth2_user_token
+
+
 def _response_to_dict(payload):
     if isinstance(payload, dict):
         return payload
@@ -450,6 +482,86 @@ def _payload_data(payload):
     if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
         return payload["data"]
     return payload if isinstance(payload, dict) else {}
+
+
+def _payload_data_list(payload):
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        return payload["data"]
+    return []
+
+
+def _coerce_text(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_bookmarks_page(payload):
+    includes = payload.get("includes") or {}
+    users = includes.get("users") or []
+    user_by_id = {}
+    for item in users:
+        if isinstance(item, dict) and item.get("id") is not None:
+            user_by_id[str(item["id"])] = item
+
+    items = []
+    for tweet in _payload_data_list(payload):
+        if not isinstance(tweet, dict):
+            continue
+        tweet_id = _coerce_text(tweet.get("id"))
+        if not tweet_id:
+            continue
+        author = user_by_id.get(_coerce_text(tweet.get("author_id")), {})
+        username = _coerce_text(author.get("username"))
+        items.append(
+            {
+                "tweet_id": tweet_id,
+                "conversation_id": _coerce_text(tweet.get("conversation_id")) or tweet_id,
+                "text": _coerce_text(tweet.get("text")),
+                "author_id": _coerce_text(author.get("id")) or _coerce_text(tweet.get("author_id")),
+                "author_name": _coerce_text(author.get("name")),
+                "author_username": username,
+                "created_at": _coerce_text(tweet.get("created_at")),
+                "url": f"https://x.com/{username or 'i'}/status/{tweet_id}",
+            }
+        )
+    return items
+
+
+def _authenticated_user_id(xdk_client):
+    response = xdk_client.users.get_me(user_fields=["id", "name", "username"])
+    payload = _response_to_dict(response)
+    user = _payload_data(payload)
+    user_id = _coerce_text(user.get("id"))
+    if not user_id:
+        raise RuntimeError("X API returned no authenticated user id.")
+    return user_id
+
+
+def get_bookmarks(xdk_client, limit=100):
+    user_id = _authenticated_user_id(xdk_client)
+    bookmarks = []
+    remaining = max(1, int(limit))
+    per_page = min(remaining, 100)
+    pages = xdk_client.users.get_bookmarks(
+        user_id,
+        max_results=per_page,
+        tweet_fields=["author_id", "conversation_id", "created_at"],
+        expansions=["author_id"],
+        user_fields=["id", "name", "username"],
+    )
+    for page in pages:
+        payload = _response_to_dict(page)
+        bookmarks.extend(_normalize_bookmarks_page(payload))
+        if len(bookmarks) >= limit:
+            break
+    return bookmarks[:limit]
+
+
+def delete_bookmark(xdk_client, tweet_id):
+    user_id = _authenticated_user_id(xdk_client)
+    response = xdk_client.users.delete_bookmark(user_id, tweet_id)
+    return _response_to_dict(response)
 
 
 def _media_id_from_payload(payload):
@@ -622,18 +734,24 @@ def upload_media(xdk_client, media_path):
     return _chunked_media_upload(media_client, media_path, media_type, media_category)
 
 
-def post_tweet(auth, headers, text, media_ids=None, xdk_client=None):
+def post_tweet(auth, headers, text, media_ids=None, xdk_client=None, reply_to_tweet_id=None):
     if xdk_client is not None:
         xdk_symbols = _xdk_symbols()
         if xdk_symbols is None:
             raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
         CreateRequest = xdk_symbols[4]
         CreateRequestMedia = xdk_symbols[5]
+        CreateRequestReply = xdk_symbols[6]
         body = CreateRequest()
         if text:
             body.text = text
         if media_ids:
             body.media = CreateRequestMedia(media_ids=[str(media_id) for media_id in media_ids])
+        if reply_to_tweet_id:
+            body.reply = CreateRequestReply(
+                in_reply_to_tweet_id=str(reply_to_tweet_id),
+                auto_populate_reply_metadata=True,
+            )
         return _xdk_call_with_retries(
             xdk_client.posts.create,
             body,
@@ -645,6 +763,11 @@ def post_tweet(auth, headers, text, media_ids=None, xdk_client=None):
         payload["text"] = text
     if media_ids:
         payload["media"] = {"media_ids": [str(media_id) for media_id in media_ids]}
+    if reply_to_tweet_id:
+        payload["reply"] = {
+            "in_reply_to_tweet_id": str(reply_to_tweet_id),
+            "auto_populate_reply_metadata": True,
+        }
 
     response = _request_with_retries(
         "POST",
@@ -669,7 +792,7 @@ def build_top_level_parser():
     parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
     parser.add_argument("-v", dest="version", action="store_true", help="Show version and exit.")
     parser.add_argument("-u", dest="upgrade", action="store_true", help="Upgrade to the latest version.")
-    parser.add_argument("command", nargs="?", help="Command: p or ea.")
+    parser.add_argument("command", nargs="?", help="Command: p, ea, b, or r.")
     parser.add_argument("command_args", nargs=argparse.REMAINDER)
     return parser
 
@@ -680,6 +803,38 @@ def build_publish_parser():
     parser.add_argument("-m", dest="media", help="Path to an image/GIF/video to attach.")
     parser.add_argument("-e", dest="edit", action="store_true", help="Open Vim to compose the post.")
     parser.add_argument("text", nargs="*", help="Post text. If omitted, use -e to open Vim.")
+    return parser
+
+
+def build_bookmark_parser():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
+    parser.add_argument("bookmark_command", nargs="?", help="Bookmark command: ls or rm.")
+    parser.add_argument("bookmark_args", nargs=argparse.REMAINDER)
+    return parser
+
+
+def build_bookmark_list_parser():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
+    parser.add_argument("-j", dest="json_output", action="store_true", help="Print JSON.")
+    parser.add_argument("-n", dest="count", type=int, default=100, help="Maximum bookmarks to list.")
+    return parser
+
+
+def build_reply_parser():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
+    parser.add_argument("-e", dest="edit", action="store_true", help="Open editor for reply text.")
+    parser.add_argument("tweet_id", nargs="?", help="Tweet id to reply to.")
+    parser.add_argument("text", nargs=argparse.REMAINDER, help="Reply text.")
+    return parser
+
+
+def build_auth_check_parser():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
+    parser.add_argument("-r", dest="reissue", action="store_true", help="Force token re-issuance.")
     return parser
 
 
@@ -765,9 +920,12 @@ def _run_upgrade():
     return bash_rc
 
 
-def read_from_vim():
+def read_from_vim(initial_text=""):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
         temp_path = tmp.name
+        if initial_text:
+            tmp.write(initial_text.encode("utf-8"))
+            tmp.flush()
 
     try:
         while True:
@@ -846,24 +1004,94 @@ def main():
         return
 
     if args.command == "ea":
-        if args.command_args:
-            raise SystemExit("Usage: x ea")
-        oauth2_user_token = get_user_access_token(auto_refresh=True)
-        if not oauth2_user_token:
-            print(
-                "No valid OAuth2 user token found. Starting browser login...",
-                file=sys.stderr,
-            )
+        auth_check_parser = build_auth_check_parser()
+        auth_args = auth_check_parser.parse_args(args.command_args)
+        if auth_args.help_flag:
+            print_usage()
+            return
+        if auth_args.reissue:
             rc = _run_oauth2_login_helper()
-            if rc == 0:
-                oauth2_user_token = get_user_access_token(auto_refresh=True)
-        if not oauth2_user_token:
-            raise SystemExit("OAuth2 token check failed.")
+            if rc != 0:
+                raise SystemExit("OAuth2 token re-issuance failed.")
+            if not get_user_access_token(auto_refresh=True):
+                raise SystemExit("OAuth2 token check failed after re-issuance.")
+        else:
+            _ensure_oauth2_user_token()
         print("X OAuth2 token is ready.")
         return
 
+    if args.command == "b":
+        bookmark_parser = build_bookmark_parser()
+        bookmark_args = bookmark_parser.parse_args(args.command_args)
+        if bookmark_args.help_flag or not bookmark_args.bookmark_command:
+            print_usage()
+            return
+        if bookmark_args.bookmark_command == "ls":
+            list_parser = build_bookmark_list_parser()
+            list_args = list_parser.parse_args(bookmark_args.bookmark_args)
+            if list_args.help_flag:
+                print_usage()
+                return
+            oauth2_user_token = _ensure_oauth2_user_token()
+            xdk_client = _build_xdk_client(oauth2_user_token)
+            bookmarks = get_bookmarks(xdk_client, limit=max(1, list_args.count))
+            if list_args.json_output:
+                print(json.dumps({"bookmarks": bookmarks}, indent=2))
+                return
+            if not bookmarks:
+                print("No bookmarks found.")
+                return
+            for index, bookmark in enumerate(bookmarks, start=1):
+                header = f"[{index}] {bookmark['tweet_id']} @{bookmark['author_username'] or 'unknown'}"
+                if bookmark["created_at"]:
+                    header += f" {bookmark['created_at']}"
+                print(header)
+                print(bookmark["url"])
+                print(bookmark["text"] or "-")
+                print("")
+            return
+        if bookmark_args.bookmark_command == "rm":
+            if len(bookmark_args.bookmark_args) != 1:
+                raise SystemExit("Usage: x b rm <tweet_id>")
+            oauth2_user_token = _ensure_oauth2_user_token()
+            xdk_client = _build_xdk_client(oauth2_user_token)
+            delete_bookmark(xdk_client, bookmark_args.bookmark_args[0])
+            print(f"Removed bookmark. id={bookmark_args.bookmark_args[0]}")
+            return
+        raise SystemExit("Usage: x b ls [-j] [-n <count>] | x b rm <tweet_id>")
+
+    if args.command == "r":
+        reply_parser = build_reply_parser()
+        reply_args = reply_parser.parse_args(args.command_args)
+        if reply_args.help_flag or not reply_args.tweet_id:
+            print_usage()
+            return
+        if reply_args.edit and reply_args.text:
+            raise SystemExit("Use `x r <tweet_id> -e` without inline text.")
+        if reply_args.edit:
+            text = read_from_vim()
+        else:
+            text = " ".join(reply_args.text).strip()
+        if not text:
+            raise SystemExit("Reply text is required.")
+        oauth2_user_token = _ensure_oauth2_user_token()
+        xdk_client = _build_xdk_client(oauth2_user_token)
+        result = post_tweet(
+            None,
+            {"Authorization": f"Bearer {oauth2_user_token}"},
+            text,
+            xdk_client=xdk_client,
+            reply_to_tweet_id=reply_args.tweet_id,
+        )
+        result_payload = _response_to_dict(result)
+        tweet_id = result_payload.get("data", {}).get("id", "unknown")
+        print(f"Posted reply to X. id={tweet_id}")
+        return
+
     if args.command != "p":
-        raise SystemExit("Usage: x p <text> [-m <path>] | x p -e [-m <path>] | x ea")
+        raise SystemExit(
+            "Usage: x p <text> [-m <path>] | x p -e [-m <path>] | x ea | x b ls [-j] [-n <count>] | x b rm <tweet_id> | x r <tweet_id> <text>"
+        )
 
     publish_parser = build_publish_parser()
     parse_publish = getattr(publish_parser, "parse_intermixed_args", publish_parser.parse_args)
@@ -890,13 +1118,10 @@ def main():
 
     oauth2_user_token = get_user_access_token(auto_refresh=True)
     if not oauth2_user_token:
-        print(
-            "No valid OAuth2 user token found. Starting browser login...",
-            file=sys.stderr,
-        )
-        rc = _run_oauth2_login_helper()
-        if rc == 0:
-            oauth2_user_token = get_user_access_token(auto_refresh=True)
+        try:
+            oauth2_user_token = _ensure_oauth2_user_token()
+        except SystemExit:
+            oauth2_user_token = None
 
     auth = None
     headers = None
