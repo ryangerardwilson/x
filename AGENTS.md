@@ -26,6 +26,7 @@
 - Default OAuth2 token storage must use XDG data paths, currently `~/.local/share/x/tokens/oauth2_token.json` unless `XDG_DATA_HOME` or explicit env overrides are set.
 - Keep environment overrides working for operators.
 - Do not reintroduce default token storage under `~/.x/`.
+- Observed behavior: a token generated successfully while running `python main.py` may not work after upgrading and running the installed `x` binary. In that case, re-run auth under the installed `x` binary and mint a fresh token there.
 - X API calls should go through the X SDK only. Do not add or reintroduce raw HTTP publish flows as a fallback.
 - When changing OAuth2 or SDK usage, study the official X SDK Python samples first: `https://github.com/xdevplatform/samples/tree/main/python`. Load the smallest relevant sample set for the flow you are touching instead of inventing the auth or client pattern from scratch.
 
