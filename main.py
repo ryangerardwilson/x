@@ -314,10 +314,39 @@ def get_user_access_token(auto_refresh=True):
 
 
 def _run_oauth2_login_helper():
-    helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oauth2_login.py")
-    if not os.path.isfile(helper):
-        raise RuntimeError(f"Missing helper script: {helper}")
-    return subprocess.call([sys.executable, helper])
+    try:
+        from oauth2_login import main as oauth2_login_main
+    except ImportError as exc:
+        helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oauth2_login.py")
+        if not os.path.isfile(helper):
+            raise RuntimeError(f"Missing helper script: {helper}") from exc
+        return subprocess.call([sys.executable, helper])
+
+    try:
+        original_argv = list(sys.argv)
+        sys.argv = ["oauth2_login.py"]
+        oauth2_login_main()
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        print(str(code), file=sys.stderr)
+        return 1
+    finally:
+        sys.argv = original_argv
+    return 0
+
+
+def _validate_oauth2_user_token(oauth2_user_token):
+    xdk_client = _build_xdk_client(oauth2_user_token)
+    _authenticated_user_id(xdk_client)
+    return oauth2_user_token
+
+
+def _ensure_valid_oauth2_user_token():
+    return _validate_oauth2_user_token(_ensure_oauth2_user_token())
 
 
 def _build_xdk_client(access_token):
@@ -1007,10 +1036,18 @@ def main():
             rc = _run_oauth2_login_helper()
             if rc != 0:
                 raise SystemExit("OAuth2 token re-issuance failed.")
-            if not get_user_access_token(auto_refresh=True):
+            oauth2_user_token = get_user_access_token(auto_refresh=True)
+            if not oauth2_user_token:
                 raise SystemExit("OAuth2 token check failed after re-issuance.")
+            try:
+                _validate_oauth2_user_token(oauth2_user_token)
+            except Exception as exc:
+                raise SystemExit(f"OAuth2 token validation failed after re-issuance: {exc}")
         else:
-            _ensure_oauth2_user_token()
+            try:
+                _ensure_valid_oauth2_user_token()
+            except Exception as exc:
+                raise SystemExit(f"OAuth2 token validation failed: {exc}")
         print("X OAuth2 token is ready.")
         return
 
