@@ -20,28 +20,46 @@ Usage: install.sh [options]
 
 Options:
   -h, --help              Display this help message
-  -v, --version <version> Install a specific version (e.g., 0.1.0 or v0.1.0)
+  -v                      Print the latest release version
+  -v <version>            Install a specific version (e.g., 0.1.0 or v0.1.0)
+  -u, --upgrade           Upgrade to the latest release
   -b, --binary <path>     Install from a local binary instead of downloading
       --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- --version 0.1.0
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- -v 0.1.0
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- -u
   ./install.sh --binary /path/to/x
 EOF
 }
 
-requested_version=${VERSION:-}
+requested_version=""
+show_latest=false
+upgrade=false
 no_modify_path=false
 binary_path=""
+
+get_latest_version() {
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p'
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     -v|--version)
-      [[ -n "${2:-}" ]] || { echo -e "${RED}Error: --version requires an argument${NC}"; exit 1; }
-      requested_version="$2"
-      shift 2
+      if [[ -n "${2:-}" && "${2:0:1}" != "-" ]]; then
+        requested_version="${2#v}"
+        shift 2
+      else
+        show_latest=true
+        shift
+      fi
+      ;;
+    -u|--upgrade)
+      upgrade=true
+      shift
       ;;
     -b|--binary)
       [[ -n "${2:-}" ]] || { echo -e "${RED}Error: --binary requires a path${NC}"; exit 1; }
@@ -53,11 +71,16 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo -e "${ORANGE}Warning: Unknown option '$1'${NC}" >&2
-      shift
+      echo -e "${RED}Error: unknown option '$1'${NC}" >&2
+      exit 1
       ;;
   esac
 done
+
+if $upgrade && [[ -n "$requested_version" || -n "$binary_path" ]]; then
+  echo -e "${RED}Error: -u cannot be combined with -v <version> or -b${NC}" >&2
+  exit 1
+fi
 
 print_message() {
   local level=$1
@@ -66,6 +89,23 @@ print_message() {
   [[ "$level" == "error" ]] && color="${RED}"
   echo -e "${color}${message}${NC}"
 }
+
+if $show_latest; then
+  get_latest_version
+  exit 0
+fi
+
+if $upgrade; then
+  latest_version="$(get_latest_version)"
+  if command -v "${APP}" >/dev/null 2>&1; then
+    installed_version="$(${APP} -v 2>/dev/null || true)"
+    installed_version="${installed_version#v}"
+    if [[ -n "$installed_version" && "$installed_version" == "$latest_version" ]]; then
+      exit 0
+    fi
+  fi
+  requested_version="$latest_version"
+fi
 
 mkdir -p "$INSTALL_DIR"
 
@@ -96,24 +136,27 @@ else
   mkdir -p "$APP_DIR"
 
   if [[ -z "$requested_version" ]]; then
-    url="https://github.com/${REPO}/releases/latest/download/${filename}"
-    specific_version="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' || true)"
-    [[ -n "$specific_version" ]] || specific_version="latest"
+    requested_version="$(get_latest_version)"
   else
     requested_version="${requested_version#v}"
-    url="https://github.com/${REPO}/releases/download/v${requested_version}/${filename}"
-    specific_version="${requested_version}"
-
-    http_status=$(curl -sI -o /dev/null -w "%{http_code}" "https://github.com/${REPO}/releases/tag/v${requested_version}")
-    if [[ "$http_status" == "404" ]]; then
-      print_message error "Release v${requested_version} not found"
-      print_message info  "${MUTED}See available releases: ${NC}https://github.com/${REPO}/releases"
-      exit 1
-    fi
   fi
 
-  if command -v "${APP}" >/dev/null 2>&1 && [[ "$specific_version" != "latest" ]]; then
+  if [[ -z "$requested_version" ]]; then
+    print_message error "Unable to determine the latest release version"
+    exit 1
+  fi
+
+  url="https://github.com/${REPO}/releases/download/v${requested_version}/${filename}"
+  specific_version="${requested_version}"
+
+  http_status=$(curl -sI -o /dev/null -w "%{http_code}" "https://github.com/${REPO}/releases/tag/v${requested_version}")
+  if [[ "$http_status" == "404" ]]; then
+    print_message error "Release v${requested_version} not found"
+    print_message info  "${MUTED}See available releases: ${NC}https://github.com/${REPO}/releases"
+    exit 1
+  fi
+
+  if command -v "${APP}" >/dev/null 2>&1; then
     installed_version=$(${APP} -v 2>/dev/null || true)
     if [[ -n "$installed_version" && "$installed_version" == "$specific_version" ]]; then
       print_message info "${MUTED}${APP} version ${NC}${specific_version}${MUTED} already installed${NC}"

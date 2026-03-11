@@ -2,6 +2,8 @@
 
 Terminal CLI for publishing to X and handling bookmark-driven reply flows.
 
+`x -v` prints the installed app version from `_version.py`. Source checkouts keep a placeholder value; tagged release builds stamp the shipped artifact with the real version.
+
 ## Install
 
 ```bash
@@ -108,6 +110,15 @@ features:
 
 If the draft exceeds 280 characters, the CLI prompts for re-edit or cancel.
 
+## Version And Upgrade
+
+```bash
+x -v
+x -u
+```
+
+`x -u` delegates installation work to the top-level `install.sh` contract.
+
 ## Auth Behavior
 
 - OAuth2 user token is preferred for posting.
@@ -127,4 +138,4 @@ python main.py -h
 
 ## Release workflow
 
-Tags like `v0.1.0` trigger GitHub Actions to build `x-linux-x64.tar.gz` and publish a release.
+Tag the desired `v<version>` release and let the release workflow stamp `_version.py` in the shipped bundle before publishing `x-linux-x64.tar.gz`.

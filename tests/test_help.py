@@ -2,6 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 import unittest
+from unittest.mock import MagicMock, patch
 
 
 APP = Path(__file__).resolve().parents[1] / "main.py"
@@ -39,6 +40,31 @@ class HelpOutputTests(unittest.TestCase):
         self.assertIn("# x b ls [-j] [-n <count>]", result.stdout)
         self.assertIn("# x r <tweet_id> <text> | x r <tweet_id> -e", result.stdout)
         self.assertIn("x p -m ~/media/demo.mp4 -e", result.stdout)
+
+    def test_version_prints_single_value(self):
+        result = subprocess.run(
+            [sys.executable, str(APP), "-v"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(result.stdout.strip(), "0.0.0")
+
+    def test_upgrade_passes_u_to_installer(self):
+        from main import _run_upgrade
+
+        curl_process = MagicMock()
+        curl_process.stdout = MagicMock()
+        curl_process.wait.return_value = 0
+        curl_process.stderr = MagicMock()
+        bash_process = MagicMock()
+        bash_process.wait.return_value = 0
+
+        with patch("main.subprocess.Popen", side_effect=[curl_process, bash_process]) as popen:
+            rc = _run_upgrade()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(popen.call_args_list[1].args[0], ["bash", "-s", "--", "-u"])
 
 
 if __name__ == "__main__":

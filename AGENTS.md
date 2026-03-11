@@ -1,5 +1,10 @@
 # x Agent Guide
 
+## Workspace Defaults
+- Follow `/home/ryan/Documents/agent_context/CLI_TUI_STYLE_GUIDE.md` for CLI/TUI taste and help shape.
+- Follow `/home/ryan/Documents/agent_context/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `-h`, `-v`, `-u`, installer behavior, release workflow expectations, and regression expectations.
+- This file only records `x`-specific constraints or durable deviations.
+
 ## Scope
 - `x` is a terminal CLI for publishing to X and handling the minimal bookmark/reply flows that support `replyguy`.
 - Keep the interface keyboard-first and explicit. Do not turn this repo into a generic social scheduler or GUI wrapper.
@@ -29,6 +34,7 @@
 - Keep output plain-text and deterministic.
 
 ## Repo Guardrails
-- `_version.py` remains the single runtime version module, but release numbers must be injected by CI from tags rather than hand-edited in git.
+- `_version.py` is the single runtime version module.
+- Keep the checked-in value as a placeholder and let tagged release automation stamp the shipped artifact with the real version.
 - `install.sh` may keep conventional long installer flags, but user-facing app hints should reference the canonical app flags.
 - Keep runtime logic small and local unless complexity clearly justifies another module.

@@ -9,10 +9,7 @@ import sys
 import tempfile
 import time
 
-try:
-    from _version import __version__
-except Exception:
-    __version__ = "0.0.0"
+from _version import __version__
 
 INSTALL_URL = "https://raw.githubusercontent.com/ryangerardwilson/x/main/install.sh"
 LATEST_RELEASE_API = "https://api.github.com/repos/ryangerardwilson/x/releases/latest"
@@ -522,6 +519,7 @@ def _normalize_bookmarks_page(payload):
                 "author_name": _coerce_text(author.get("name")),
                 "author_username": username,
                 "created_at": _coerce_text(tweet.get("created_at")),
+                "reply_settings": _coerce_text(tweet.get("reply_settings")),
                 "url": f"https://x.com/{username or 'i'}/status/{tweet_id}",
             }
         )
@@ -546,7 +544,7 @@ def get_bookmarks(xdk_client, limit=100):
     pages = xdk_client.users.get_bookmarks(
         user_id,
         max_results=per_page,
-        tweet_fields=["author_id", "conversation_id", "created_at"],
+        tweet_fields=["author_id", "conversation_id", "created_at", "reply_settings"],
         expansions=["author_id"],
         user_fields=["id", "name", "username"],
     )
@@ -897,7 +895,7 @@ def _run_upgrade():
         return 1
 
     try:
-        bash = subprocess.Popen(["bash"], stdin=curl.stdout)
+        bash = subprocess.Popen(["bash", "-s", "--", "-u"], stdin=curl.stdout)
         if curl.stdout is not None:
             curl.stdout.close()
     except FileNotFoundError:
@@ -984,15 +982,11 @@ def main():
             rc = _run_upgrade()
             sys.exit(rc)
 
-        if (
-            __version__
-            and __version__ != "0.0.0"
-            and not _is_version_newer(latest, __version__)
-        ):
+        if __version__ and not _is_version_newer(latest, __version__):
             print(f"Already running the latest version ({__version__}).")
             sys.exit(0)
 
-        if __version__ and __version__ != "0.0.0":
+        if __version__:
             print(f"Upgrading from {__version__} to {latest}…")
         else:
             print(f"Upgrading to {latest}…")
