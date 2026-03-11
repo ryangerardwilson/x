@@ -41,6 +41,30 @@ class AuthFlowTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         subprocess_call.assert_not_called()
 
+    def test_plain_publish_uses_xdk_client(self):
+        xdk_client = object()
+        with patch.object(sys, "argv", ["main.py", "p", "hello world"]):
+            with patch.object(main, "_ensure_valid_oauth2_user_token", return_value="token"):
+                with patch.object(main, "_build_xdk_client", return_value=xdk_client) as build_client:
+                    with patch.object(main, "post_tweet", return_value={"data": {"id": "42"}}) as post_tweet:
+                        with patch("sys.stdout", new=StringIO()) as stdout:
+                            main.main()
+        build_client.assert_called_once_with("token")
+        post_tweet.assert_called_once_with("hello world", xdk_client=xdk_client, media_ids=None)
+        self.assertEqual(stdout.getvalue(), "Posted to X. id=42\n")
+
+    def test_reply_uses_xdk_client(self):
+        xdk_client = object()
+        with patch.object(sys, "argv", ["main.py", "r", "123", "hello"]):
+            with patch.object(main, "_ensure_valid_oauth2_user_token", return_value="token"):
+                with patch.object(main, "_build_xdk_client", return_value=xdk_client) as build_client:
+                    with patch.object(main, "post_tweet", return_value={"data": {"id": "99"}}) as post_tweet:
+                        with patch("sys.stdout", new=StringIO()) as stdout:
+                            main.main()
+        build_client.assert_called_once_with("token")
+        post_tweet.assert_called_once_with("hello", xdk_client=xdk_client, reply_to_tweet_id="123")
+        self.assertEqual(stdout.getvalue(), "Posted reply to X. id=99\n")
+
 
 if __name__ == "__main__":
     unittest.main()

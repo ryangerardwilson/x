@@ -56,8 +56,6 @@ export X_USER_ACCESS_TOKEN="..."
 
 Also accepted: `X_OAUTH2_USER_TOKEN`, `X_BEARER_TOKEN`.
 
-Optional text-only fallback: `X_CONSUMER_KEY`, `X_CONSUMER_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`, or `TWITTER_*`.
-
 For bookmark-driven reply flows, the token needs:
 
 ```text
@@ -121,11 +119,11 @@ x -u
 
 ## Auth Behavior
 
-- OAuth2 user token is preferred for posting.
+- OAuth2 user token is required for posting.
 - `x ea -r` forces a fresh OAuth2 login and rewrites the saved token.
 - Bookmark lookup and removal require an OAuth2 user token with bookmark scopes.
 - `-m` requires an OAuth2 user token with media scope.
-- Text-only publish can fall back to OAuth1 credentials if OAuth2 is unavailable.
+- X API calls use the X SDK path; there is no raw HTTP publish fallback.
 
 ## Source Run
 

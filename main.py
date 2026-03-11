@@ -13,7 +13,6 @@ from _version import __version__
 
 INSTALL_URL = "https://raw.githubusercontent.com/ryangerardwilson/x/main/install.sh"
 LATEST_RELEASE_API = "https://api.github.com/repos/ryangerardwilson/x/releases/latest"
-X_OAUTH2_TOKEN_URL = "https://api.x.com/2/oauth2/token"
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
 MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -62,14 +61,6 @@ def _requests_module():
     return requests
 
 
-def _oauth1_class():
-    try:
-        from requests_oauthlib import OAuth1
-    except ImportError:
-        return None
-    return OAuth1
-
-
 def _xdk_symbols():
     try:
         from xdk import Client as XdkClient
@@ -92,6 +83,14 @@ def _xdk_symbols():
     )
 
 
+def _oauth2_pkce_auth_class():
+    try:
+        from xdk.oauth2_auth import OAuth2PKCEAuth
+    except ImportError:
+        return None
+    return OAuth2PKCEAuth
+
+
 def _urllib_parse():
     import urllib.parse
 
@@ -105,42 +104,41 @@ def _urllib_request_symbols():
     return Request, urlopen, HTTPError, URLError
 
 
-def build_auth():
-    OAuth1 = _oauth1_class()
-    if OAuth1 is None:
-        raise RuntimeError("Missing dependency: requests-oauthlib. Install requirements.txt first.")
-    consumer_key = get_env("X_CONSUMER_KEY", "TWITTER_CONSUMER_KEY")
-    consumer_secret = get_env("X_CONSUMER_SECRET", "TWITTER_CONSUMER_SECRET")
-    access_token = get_env("X_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN")
-    access_token_secret = get_env("X_ACCESS_TOKEN_SECRET", "TWITTER_ACCESS_TOKEN_SECRET")
-
-    missing = [
-        name
-        for name, value in [
-            ("X_CONSUMER_KEY", consumer_key),
-            ("X_CONSUMER_SECRET", consumer_secret),
-            ("X_ACCESS_TOKEN", access_token),
-            ("X_ACCESS_TOKEN_SECRET", access_token_secret),
-        ]
-        if not value
-    ]
-
-    if missing:
-        raise RuntimeError(
-            "Missing credentials: "
-            + ", ".join(missing)
-            + ". Set env vars or their TWITTER_* equivalents."
-        )
-
-    return OAuth1(consumer_key, consumer_secret, access_token, access_token_secret)
-
-
 def _oauth2_token_file_path():
     token_file = (
         get_env("X_OAUTH2_TOKEN_FILE", "TWITTER_OAUTH2_TOKEN_FILE")
         or _default_oauth2_token_file()
     )
     return os.path.expanduser(token_file)
+
+
+def _build_oauth2_auth(payload):
+    OAuth2PKCEAuth = _oauth2_pkce_auth_class()
+    if OAuth2PKCEAuth is None:
+        raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
+
+    client_id = get_env("X_CLIENT_ID", "TWITTER_CLIENT_ID") or payload.get("client_id")
+    if not client_id:
+        raise RuntimeError("Missing OAuth2 client id.")
+
+    redirect_uri = (
+        get_env("X_OAUTH2_REDIRECT_URI", "TWITTER_OAUTH2_REDIRECT_URI")
+        or payload.get("redirect_uri")
+    )
+    if not redirect_uri:
+        raise RuntimeError("Missing OAuth2 redirect URI.")
+
+    scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else None
+    client_secret = get_env("X_CLIENT_SECRET", "TWITTER_CLIENT_SECRET")
+    token = payload.get("token") if isinstance(payload.get("token"), dict) else None
+
+    return OAuth2PKCEAuth(
+        client_id=client_id,
+        client_secret=client_secret or None,
+        redirect_uri=redirect_uri,
+        token=token,
+        scope=scopes,
+    )
 
 
 def print_usage():
@@ -234,57 +232,20 @@ def _extract_access_token(payload):
 
 
 def _refresh_oauth2_access_token(token_file, payload):
-    urllib_parse = _urllib_parse()
-    Request, urlopen, HTTPError, URLError = _urllib_request_symbols()
+    try:
+        auth = _build_oauth2_auth(payload)
+        refreshed = auth.refresh_token()
+    except Exception:
+        return None
+    if not isinstance(refreshed, dict):
+        return None
+
     token_obj = payload.get("token") if isinstance(payload.get("token"), dict) else {}
     refresh_token = (
         get_env("X_OAUTH2_REFRESH_TOKEN", "TWITTER_OAUTH2_REFRESH_TOKEN")
         or token_obj.get("refresh_token")
         or payload.get("refresh_token")
     )
-    if not refresh_token:
-        return None
-
-    client_id = get_env("X_CLIENT_ID", "TWITTER_CLIENT_ID") or payload.get("client_id")
-    if not client_id:
-        return None
-    client_secret = get_env("X_CLIENT_SECRET", "TWITTER_CLIENT_SECRET")
-
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    if client_secret:
-        basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode(
-            "utf-8"
-        )
-        headers["Authorization"] = f"Basic {basic}"
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": client_id,
-    }
-
-    encoded = urllib_parse.urlencode(data).encode("utf-8")
-    request = Request(X_OAUTH2_TOKEN_URL, data=encoded, headers=headers, method="POST")
-    try:
-        with urlopen(request, timeout=30) as response:
-            body = response.read()
-            status_code = response.getcode()
-            response_headers = response.headers
-    except (HTTPError, URLError, TimeoutError, OSError):
-        return None
-    response = _HttpResponse(status_code, response_headers, body)
-    if response.status_code < 200 or response.status_code >= 300:
-        return None
-
-    try:
-        refreshed = response.json()
-    except ValueError:
-        return None
-    if not isinstance(refreshed, dict):
-        return None
-
-    expires_in = int(refreshed.get("expires_in") or 0)
-    if expires_in > 0:
-        refreshed["expires_at"] = int(time.time()) + expires_in
     if not refreshed.get("refresh_token"):
         refreshed["refresh_token"] = refresh_token
 
@@ -383,32 +344,6 @@ def _response_to_dict(payload):
     return {}
 
 
-def _raise_for_x_error(response):
-    if 200 <= response.status_code < 300:
-        return
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = None
-
-    if isinstance(payload, dict):
-        errors = payload.get("errors")
-        if isinstance(errors, list):
-            for err in errors:
-                if isinstance(err, dict) and err.get("code") == 453:
-                    raise RuntimeError(
-                        "X API access error (453): this app/token is restricted to a subset of endpoints. "
-                        "Your current access level does not allow the attempted endpoint. "
-                        "Check your plan in https://developer.x.com/en/portal/product, then regenerate user tokens."
-                    )
-    if response.status_code == 503:
-        raise RuntimeError(
-            "X API error 503: Media service unavailable after retries. "
-            "This is typically transient on X's side; retry in 30-120 seconds."
-        )
-    raise RuntimeError(f"X API error {response.status_code}: {response.text.strip()}")
-
-
 def _retry_delay_seconds(response, attempt):
     retry_after = response.headers.get("Retry-After")
     if retry_after:
@@ -443,66 +378,6 @@ def _xdk_call_with_retries(method, *args, retries=MEDIA_UPLOAD_RETRIES, **kwargs
             if attempt == retries:
                 raise
             time.sleep(min(2 ** attempt, 16))
-
-
-def _urllib_request(method, url, headers=None, json_body=None, form_body=None, timeout=30):
-    urllib_parse = _urllib_parse()
-    Request, urlopen, HTTPError, _ = _urllib_request_symbols()
-    request_headers = dict(headers or {})
-    body = None
-    if json_body is not None:
-        body = json.dumps(json_body).encode("utf-8")
-        request_headers.setdefault("Content-Type", "application/json")
-    elif form_body is not None:
-        body = urllib_parse.urlencode(form_body).encode("utf-8")
-        request_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
-
-    request = Request(url, data=body, headers=request_headers, method=method.upper())
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return _HttpResponse(response.getcode(), response.headers, response.read())
-    except HTTPError as exc:
-        return _HttpResponse(exc.code, exc.headers, exc.read())
-
-
-def _request_with_retries(method, url, auth=None, headers=None, retries=4, **kwargs):
-    if auth is None:
-        _, _, _, URLError = _urllib_request_symbols()
-        timeout = kwargs.get("timeout", 30)
-        json_body = kwargs.get("json")
-        form_body = kwargs.get("data")
-        for attempt in range(retries + 1):
-            try:
-                response = _urllib_request(
-                    method,
-                    url,
-                    headers=headers,
-                    json_body=json_body,
-                    form_body=form_body,
-                    timeout=timeout,
-                )
-            except (URLError, TimeoutError, OSError):
-                if attempt == retries:
-                    raise
-                time.sleep(min(2 ** attempt, 16))
-                continue
-            if response.status_code not in RETRYABLE_STATUS_CODES:
-                return response
-            if attempt == retries:
-                return response
-            time.sleep(_retry_delay_seconds(response, attempt))
-        return response
-
-    requests = _requests_module()
-    for attempt in range(retries + 1):
-        response = requests.request(method, url, auth=auth, headers=headers, **kwargs)
-        if response.status_code not in RETRYABLE_STATUS_CODES:
-            return response
-        if attempt == retries:
-            return response
-        time.sleep(_retry_delay_seconds(response, attempt))
-    return response
-
 
 def _payload_data(payload):
     if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
@@ -761,54 +636,28 @@ def upload_media(xdk_client, media_path):
     return _chunked_media_upload(media_client, media_path, media_type, media_category)
 
 
-def post_tweet(auth, headers, text, media_ids=None, xdk_client=None, reply_to_tweet_id=None):
-    if xdk_client is not None:
-        xdk_symbols = _xdk_symbols()
-        if xdk_symbols is None:
-            raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
-        CreateRequest = xdk_symbols[4]
-        CreateRequestMedia = xdk_symbols[5]
-        CreateRequestReply = xdk_symbols[6]
-        body = CreateRequest()
-        if text:
-            body.text = text
-        if media_ids:
-            body.media = CreateRequestMedia(media_ids=[str(media_id) for media_id in media_ids])
-        if reply_to_tweet_id:
-            body.reply = CreateRequestReply(
-                in_reply_to_tweet_id=str(reply_to_tweet_id),
-                auto_populate_reply_metadata=True,
-            )
-        return _xdk_call_with_retries(
-            xdk_client.posts.create,
-            body,
-            retries=MEDIA_UPLOAD_RETRIES,
-        )
-
-    payload = {}
+def post_tweet(text, *, xdk_client, media_ids=None, reply_to_tweet_id=None):
+    xdk_symbols = _xdk_symbols()
+    if xdk_symbols is None:
+        raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
+    CreateRequest = xdk_symbols[4]
+    CreateRequestMedia = xdk_symbols[5]
+    CreateRequestReply = xdk_symbols[6]
+    body = CreateRequest()
     if text:
-        payload["text"] = text
+        body.text = text
     if media_ids:
-        payload["media"] = {"media_ids": [str(media_id) for media_id in media_ids]}
+        body.media = CreateRequestMedia(media_ids=[str(media_id) for media_id in media_ids])
     if reply_to_tweet_id:
-        payload["reply"] = {
-            "in_reply_to_tweet_id": str(reply_to_tweet_id),
-            "auto_populate_reply_metadata": True,
-        }
-
-    response = _request_with_retries(
-        "POST",
-        "https://api.x.com/2/tweets",
-        auth=auth,
-        headers=headers,
-        json=payload,
-        timeout=30,
+        body.reply = CreateRequestReply(
+            in_reply_to_tweet_id=str(reply_to_tweet_id),
+            auto_populate_reply_metadata=True,
+        )
+    return _xdk_call_with_retries(
+        xdk_client.posts.create,
+        body,
+        retries=MEDIA_UPLOAD_RETRIES,
     )
-    if 200 <= response.status_code < 300:
-        return response.json()
-
-    _raise_for_x_error(response)
-    return response.json()
 
 
 def build_top_level_parser():
@@ -1105,15 +954,9 @@ def main():
             text = " ".join(reply_args.text).strip()
         if not text:
             raise SystemExit("Reply text is required.")
-        oauth2_user_token = _ensure_oauth2_user_token()
+        oauth2_user_token = _ensure_valid_oauth2_user_token()
         xdk_client = _build_xdk_client(oauth2_user_token)
-        result = post_tweet(
-            None,
-            {"Authorization": f"Bearer {oauth2_user_token}"},
-            text,
-            xdk_client=xdk_client,
-            reply_to_tweet_id=reply_args.tweet_id,
-        )
+        result = post_tweet(text, xdk_client=xdk_client, reply_to_tweet_id=reply_args.tweet_id)
         result_payload = _response_to_dict(result)
         tweet_id = result_payload.get("data", {}).get("id", "unknown")
         print(f"Posted reply to X. id={tweet_id}")
@@ -1147,32 +990,14 @@ def main():
         print_usage()
         return
 
-    oauth2_user_token = get_user_access_token(auto_refresh=True)
-    if not oauth2_user_token:
-        try:
-            oauth2_user_token = _ensure_oauth2_user_token()
-        except SystemExit:
-            oauth2_user_token = None
-
-    auth = None
-    headers = None
-    xdk_client = None
-    if oauth2_user_token:
-        headers = {"Authorization": f"Bearer {oauth2_user_token}"}
-        if media_path:
-            xdk_client = _build_xdk_client(oauth2_user_token)
-    elif media_path:
-        raise SystemExit(
-            "Media posting requires a valid OAuth 2.0 user access token with media.write."
-        )
-    else:
-        auth = build_auth()
+    oauth2_user_token = _ensure_valid_oauth2_user_token()
+    xdk_client = _build_xdk_client(oauth2_user_token)
 
     media_ids = None
     if media_path:
         media_ids = [upload_media(xdk_client, media_path)]
 
-    result = post_tweet(auth, headers, text, media_ids=media_ids, xdk_client=xdk_client)
+    result = post_tweet(text, xdk_client=xdk_client, media_ids=media_ids)
     result_payload = _response_to_dict(result)
     tweet_id = result_payload.get("data", {}).get("id", "unknown")
     if media_ids:

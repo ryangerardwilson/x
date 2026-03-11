@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import base64
-import hashlib
 import json
 import os
 import secrets
@@ -10,11 +8,7 @@ import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
-AUTH_URL = "https://x.com/i/oauth2/authorize"
-TOKEN_URL = "https://api.x.com/2/oauth2/token"
 DEFAULT_SCOPES = "tweet.read tweet.write users.read media.write bookmark.read bookmark.write offline.access"
 DEFAULT_REDIRECT_URI = "https://callback-omega-one.vercel.app/callback/x"
 
@@ -36,12 +30,12 @@ def _env(name, fallback=None):
         return os.getenv(fallback)
     return None
 
-def _pkce_pair():
-    verifier = base64.urlsafe_b64encode(os.urandom(64)).decode("utf-8").rstrip("=")
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode("utf-8")).digest()
-    ).decode("utf-8").rstrip("=")
-    return verifier, challenge
+def _oauth2_pkce_auth_class():
+    try:
+        from xdk.oauth2_auth import OAuth2PKCEAuth
+    except ImportError:
+        return None
+    return OAuth2PKCEAuth
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -69,19 +63,6 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         return
 
 
-def _build_authorize_url(client_id, redirect_uri, scopes, state, code_challenge):
-    params = {
-        "response_type": "code",
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "scope": scopes,
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    }
-    return f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
-
-
 def _extract_code_from_callback_input(value):
     raw = (value or "").strip()
     if not raw:
@@ -96,42 +77,24 @@ def _extract_code_from_callback_input(value):
     return code, state, error
 
 
-def _exchange_code_for_token(
-    client_id, redirect_uri, code_verifier, code, client_secret=None
-):
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    if client_secret:
-        basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode(
-            "utf-8"
-        )
-        headers["Authorization"] = f"Basic {basic}"
+def _build_oauth2_auth(*, client_id, client_secret, redirect_uri, scopes, token=None):
+    OAuth2PKCEAuth = _oauth2_pkce_auth_class()
+    if OAuth2PKCEAuth is None:
+        raise RuntimeError("Missing dependency: xdk. Install requirements.txt first.")
+    return OAuth2PKCEAuth(
+        client_id=client_id,
+        client_secret=client_secret or None,
+        redirect_uri=redirect_uri,
+        token=token,
+        scope=scopes,
+    )
 
-    data = {
-        "code": code,
-        "grant_type": "authorization_code",
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "code_verifier": code_verifier,
-    }
-    encoded = urllib.parse.urlencode(data).encode("utf-8")
-    request = Request(TOKEN_URL, data=encoded, headers=headers, method="POST")
-    try:
-        with urlopen(request, timeout=30) as response:
-            status_code = response.getcode()
-            body = response.read().decode("utf-8", errors="replace")
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Token exchange failed ({exc.code}): {body.strip()}") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"Token exchange failed: {exc}") from exc
 
-    if status_code < 200 or status_code >= 300:
-        raise RuntimeError(f"Token exchange failed ({status_code}): {body.strip()}")
-    token = json.loads(body)
-    expires_in = int(token.get("expires_in") or 0)
-    if expires_in > 0:
-        token["expires_at"] = int(time.time()) + expires_in
-    return token
+def _build_callback_url(redirect_uri, code, state):
+    params = {"code": code}
+    if state:
+        params["state"] = state
+    return f"{redirect_uri}?{urllib.parse.urlencode(params)}"
 
 
 def _save_token(token_file, payload):
@@ -191,11 +154,14 @@ def main():
             raise SystemExit("Missing Client ID. Set X_CLIENT_ID or pass --client-id.")
         args.client_id = entered_client_id
 
-    verifier, challenge = _pkce_pair()
     state = secrets.token_urlsafe(24)
-    authorize_url = _build_authorize_url(
-        args.client_id, args.redirect_uri, args.scopes, state, challenge
+    auth = _build_oauth2_auth(
+        client_id=args.client_id,
+        client_secret=args.client_secret,
+        redirect_uri=args.redirect_uri,
+        scopes=args.scopes.split(),
     )
+    authorize_url = auth.get_authorization_url(state=state)
 
     parsed_redirect = urllib.parse.urlparse(args.redirect_uri)
     use_local_callback = (
@@ -236,9 +202,10 @@ def main():
                 raise SystemExit(f"Authorization failed: {callback_error}")
             if callback_state != state:
                 raise SystemExit("State mismatch in callback; aborting for safety.")
+            callback_input = _build_callback_url(args.redirect_uri, code, callback_state)
         else:
             pasted = input(
-                "Paste the full redirect URL (or only the 'code' value): "
+                "Paste the full callback URL here. If you only have the callback page values, paste the code and you will be prompted for state: "
             ).strip()
             code, callback_state, callback_error = _extract_code_from_callback_input(
                 pasted
@@ -247,38 +214,43 @@ def main():
                 raise SystemExit(f"Authorization failed: {callback_error}")
             if callback_state and callback_state != state:
                 raise SystemExit("State mismatch in callback URL; aborting for safety.")
+            if "://" in pasted:
+                callback_input = pasted
+            else:
+                callback_state = input("Paste the callback state: ").strip()
+                if not callback_state:
+                    raise SystemExit("Callback state is required when pasting only the code.")
+                if callback_state != state:
+                    raise SystemExit("State mismatch in callback values; aborting for safety.")
+                callback_input = pasted
 
         if not code:
             raise SystemExit("No authorization code received.")
 
         try:
-            token = _exchange_code_for_token(
-                args.client_id,
-                args.redirect_uri,
-                verifier,
-                code,
-                client_secret=args.client_secret,
-            )
+            if "://" in callback_input:
+                token = auth.fetch_token(authorization_response=callback_input)
+            else:
+                token = auth.exchange_code(callback_input)
         except RuntimeError as exc:
             message = str(exc)
-            missing_auth_header = (
-                "Token exchange failed (401)" in message
-                and "unauthorized_client" in message
-                and "Missing valid authorization header" in message
-            )
+            missing_auth_header = "unauthorized_client" in message and "authorization header" in message.lower()
             if missing_auth_header and not args.client_secret:
                 entered_client_secret = input(
                     "X requires a Client Secret for this app. Enter X_CLIENT_SECRET: "
                 ).strip()
                 if not entered_client_secret:
                     raise
-                token = _exchange_code_for_token(
-                    args.client_id,
-                    args.redirect_uri,
-                    verifier,
-                    code,
+                auth = _build_oauth2_auth(
+                    client_id=args.client_id,
                     client_secret=entered_client_secret,
+                    redirect_uri=args.redirect_uri,
+                    scopes=args.scopes.split(),
                 )
+                if "://" in callback_input:
+                    token = auth.fetch_token(authorization_response=callback_input)
+                else:
+                    token = auth.exchange_code(callback_input)
             else:
                 raise
     finally:
