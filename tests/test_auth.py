@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 
 APP = Path(__file__).resolve().parents[1] / "main.py"
+CONTRACT_SRC = APP.parents[1] / "rgw_cli_contract" / "src"
 sys.path.insert(0, str(APP.parent))
+sys.path.insert(0, str(CONTRACT_SRC))
 SPEC = importlib.util.spec_from_file_location("x_main", APP)
 assert SPEC and SPEC.loader
 main = importlib.util.module_from_spec(SPEC)
