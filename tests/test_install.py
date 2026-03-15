@@ -24,7 +24,7 @@ class InstallScriptTests(unittest.TestCase):
             self._write_executable(
                 bin_dir / "curl",
                 "#!/usr/bin/bash\n"
-                "printf '%s\n' '{\"tag_name\":\"v0.1.21\"}'\n",
+                "printf '%s' 'https://github.com/ryangerardwilson/x/releases/tag/v0.1.21'\n",
             )
 
             env = os.environ.copy()
@@ -52,8 +52,8 @@ class InstallScriptTests(unittest.TestCase):
             self._write_executable(
                 bin_dir / "curl",
                 "#!/usr/bin/bash\n"
-                "if [[ \"$1\" == \"-fsSL\" && \"$2\" == \"https://api.github.com/repos/ryangerardwilson/x/releases/latest\" ]]; then\n"
-                "  printf '%s\n' '{\"tag_name\":\"v0.1.21\"}'\n"
+                "if [[ \"$*\" == *\"https://github.com/ryangerardwilson/x/releases/latest\"* ]]; then\n"
+                "  printf '%s' 'https://github.com/ryangerardwilson/x/releases/tag/v0.1.21'\n"
                 "  exit 0\n"
                 "fi\n"
                 "echo unexpected curl call >&2\n"
@@ -82,7 +82,7 @@ class InstallScriptTests(unittest.TestCase):
                 check=True,
             )
 
-            self.assertEqual(result.stdout, "")
+            self.assertIn("already installed", result.stdout)
             self.assertEqual(result.stderr, "")
 
 
