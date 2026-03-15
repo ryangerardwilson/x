@@ -51,20 +51,15 @@ class HelpOutputTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "0.0.0")
 
     def test_upgrade_passes_u_to_installer(self):
-        from main import _run_upgrade
+        from main import APP_SPEC, _dispatch, main
 
-        curl_process = MagicMock()
-        curl_process.stdout = MagicMock()
-        curl_process.wait.return_value = 0
-        curl_process.stderr = MagicMock()
-        bash_process = MagicMock()
-        bash_process.wait.return_value = 0
-
-        with patch("main.subprocess.Popen", side_effect=[curl_process, bash_process]) as popen:
-            rc = _run_upgrade()
+        with patch("main.run_app", return_value=0) as run_app:
+            rc = main(["-u"])
 
         self.assertEqual(rc, 0)
-        self.assertEqual(popen.call_args_list[1].args[0], ["bash", "-s", "--", "-u"])
+        self.assertEqual(run_app.call_args.args[0], APP_SPEC)
+        self.assertEqual(run_app.call_args.args[1], ["-u"])
+        self.assertIs(run_app.call_args.args[2], _dispatch)
 
 
 if __name__ == "__main__":

@@ -10,14 +10,58 @@ import tempfile
 import time
 
 from _version import __version__
+from rgw_cli_contract import AppSpec, resolve_install_script_path, run_app
 
-INSTALL_URL = "https://raw.githubusercontent.com/ryangerardwilson/x/main/install.sh"
-LATEST_RELEASE_API = "https://api.github.com/repos/ryangerardwilson/x/releases/latest"
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
 MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 ANSI_RESET = "\033[0m"
 ANSI_GRAY = "\033[38;5;245m"
+INSTALL_SCRIPT = resolve_install_script_path(__file__)
+HELP_TEXT = """X CLI
+publish to X and manage reply workflows from the terminal
+
+flags:
+  x -h
+    show this help
+  x -v
+    print the installed version
+  x -u
+    upgrade to the latest release
+
+features:
+  publish text directly
+  # x p <text>
+  x p "ship the patch"
+
+  publish with media using the canonical media flag
+  # x p <text> -m <path>
+  x p "ship the patch" -m ~/media/demo.mp4
+
+  compose in the editor resolved from $VISUAL, then $EDITOR, then vim
+  # x p -e | x p -m <path> -e
+  x p -e
+  x p -m ~/media/demo.mp4 -e
+
+  validate OAuth2 auth and exit, or force token re-issuance
+  # x ea [-r]
+  x ea
+  x ea -r
+
+  list bookmarked posts for reply workflows
+  # x b ls [-j] [-n <count>]
+  x b ls
+  x b ls -j -n 20
+
+  remove a bookmark after you have handled it
+  # x b rm <tweet_id>
+  x b rm 1894451234567890123
+
+  post a reply to a bookmarked post
+  # x r <tweet_id> <text> | x r <tweet_id> -e
+  x r 1894451234567890123 "The useful test is whether it survives contact with ops."
+  x r 1894451234567890123 -e
+"""
 
 
 class _HttpResponse:
@@ -142,53 +186,7 @@ def _build_oauth2_auth(payload):
 
 
 def print_usage():
-    print(
-        _muted_text(
-        "X CLI\n"
-        "publish to X and manage reply workflows from the terminal\n"
-        "\n"
-        "flags:\n"
-        "  x -h\n"
-        "    show this help\n"
-        "  x -v\n"
-        "    print the installed version\n"
-        "  x -u\n"
-        "    upgrade to the latest release\n"
-        "\n"
-        "features:\n"
-        "  publish text directly\n"
-        "  # x p <text>\n"
-        "  x p \"ship the patch\"\n"
-        "\n"
-        "  publish with media using the canonical media flag\n"
-        "  # x p <text> -m <path>\n"
-        "  x p \"ship the patch\" -m ~/media/demo.mp4\n"
-        "\n"
-        "  compose in the editor resolved from $VISUAL, then $EDITOR, then vim\n"
-        "  # x p -e | x p -m <path> -e\n"
-        "  x p -e\n"
-        "  x p -m ~/media/demo.mp4 -e\n"
-        "\n"
-        "  validate OAuth2 auth and exit, or force token re-issuance\n"
-        "  # x ea [-r]\n"
-        "  x ea\n"
-        "  x ea -r\n"
-        "\n"
-        "  list bookmarked posts for reply workflows\n"
-        "  # x b ls [-j] [-n <count>]\n"
-        "  x b ls\n"
-        "  x b ls -j -n 20\n"
-        "\n"
-        "  remove a bookmark after you have handled it\n"
-        "  # x b rm <tweet_id>\n"
-        "  x b rm 1894451234567890123\n"
-        "\n"
-        "  post a reply to a bookmarked post\n"
-        "  # x r <tweet_id> <text> | x r <tweet_id> -e\n"
-        "  x r 1894451234567890123 \"The useful test is whether it survives contact with ops.\"\n"
-        "  x r 1894451234567890123 -e\n"
-        )
-    )
+    print(_muted_text(HELP_TEXT.rstrip()))
 
 
 def _load_oauth2_token_payload():
@@ -665,9 +663,6 @@ def build_top_level_parser():
         description="Post to X from the command line.",
         add_help=False,
     )
-    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
-    parser.add_argument("-v", dest="version", action="store_true", help="Show version and exit.")
-    parser.add_argument("-u", dest="upgrade", action="store_true", help="Upgrade to the latest version.")
     parser.add_argument("command", nargs="?", help="Command: p, ea, b, or r.")
     parser.add_argument("command_args", nargs=argparse.REMAINDER)
     return parser
@@ -714,88 +709,6 @@ def build_auth_check_parser():
     return parser
 
 
-def _version_tuple(version):
-    if not version:
-        return (0,)
-    version = version.strip()
-    if version.startswith("v"):
-        version = version[1:]
-    parts = []
-    for segment in version.split("."):
-        digits = ""
-        for ch in segment:
-            if ch.isdigit():
-                digits += ch
-            else:
-                break
-        if digits == "":
-            break
-        parts.append(int(digits))
-    return tuple(parts) if parts else (0,)
-
-
-def _is_version_newer(candidate, current):
-    cand_tuple = _version_tuple(candidate)
-    curr_tuple = _version_tuple(current)
-    length = max(len(cand_tuple), len(curr_tuple))
-    cand_tuple += (0,) * (length - len(cand_tuple))
-    curr_tuple += (0,) * (length - len(curr_tuple))
-    return cand_tuple > curr_tuple
-
-
-def _get_latest_version(timeout=5.0):
-    Request, urlopen, HTTPError, URLError = _urllib_request_symbols()
-    try:
-        request = Request(LATEST_RELEASE_API, headers={"User-Agent": "x-updater"})
-        with urlopen(request, timeout=timeout) as resp:
-            data = resp.read().decode("utf-8", errors="replace")
-    except (URLError, HTTPError, TimeoutError):
-        return None
-    try:
-        payload = json.loads(data)
-    except json.JSONDecodeError:
-        return None
-    tag = payload.get("tag_name") or payload.get("name")
-    if isinstance(tag, str) and tag.strip():
-        return tag.strip()
-    return None
-
-
-def _run_upgrade():
-    try:
-        curl = subprocess.Popen(
-            ["curl", "-fsSL", INSTALL_URL],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except FileNotFoundError:
-        print("Upgrade requires curl", file=sys.stderr)
-        return 1
-
-    try:
-        bash = subprocess.Popen(["bash", "-s", "--", "-u"], stdin=curl.stdout)
-        if curl.stdout is not None:
-            curl.stdout.close()
-    except FileNotFoundError:
-        print("Upgrade requires bash", file=sys.stderr)
-        curl.terminate()
-        curl.wait()
-        return 1
-
-    bash_rc = bash.wait()
-    curl_rc = curl.wait()
-
-    if curl_rc != 0:
-        stderr = (
-            curl.stderr.read().decode("utf-8", errors="replace") if curl.stderr else ""
-        )
-        if stderr:
-            sys.stderr.write(stderr)
-        return curl_rc
-
-    return bash_rc
-
-
 def read_from_vim(initial_text=""):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
         temp_path = tmp.name
@@ -835,52 +748,20 @@ def read_from_vim(initial_text=""):
             pass
 
 
-def main():
+def _dispatch(argv: list[str]) -> int:
     parser = build_top_level_parser()
-    args = parser.parse_args()
-
-    if args.help_flag:
-        print_usage()
-        return
-
-    if args.version:
-        print(__version__)
-        return
-
-    if args.upgrade:
-        if args.command or args.command_args:
-            raise SystemExit("Use -u by itself to upgrade.")
-
-        latest = _get_latest_version()
-        if latest is None:
-            print(
-                "Unable to determine latest version; attempting upgrade…",
-                file=sys.stderr,
-            )
-            rc = _run_upgrade()
-            sys.exit(rc)
-
-        if __version__ and not _is_version_newer(latest, __version__):
-            print(f"Already running the latest version ({__version__}).")
-            sys.exit(0)
-
-        if __version__:
-            print(f"Upgrading from {__version__} to {latest}…")
-        else:
-            print(f"Upgrading to {latest}…")
-        rc = _run_upgrade()
-        sys.exit(rc)
+    args = parser.parse_args(argv)
 
     if not args.command:
         print_usage()
-        return
+        return 0
 
     if args.command == "ea":
         auth_check_parser = build_auth_check_parser()
         auth_args = auth_check_parser.parse_args(args.command_args)
         if auth_args.help_flag:
             print_usage()
-            return
+            return 0
         if auth_args.reissue:
             rc = _run_oauth2_login_helper()
             if rc != 0:
@@ -898,29 +779,29 @@ def main():
             except Exception as exc:
                 raise SystemExit(f"OAuth2 token validation failed: {exc}")
         print("X OAuth2 token is ready.")
-        return
+        return 0
 
     if args.command == "b":
         bookmark_parser = build_bookmark_parser()
         bookmark_args = bookmark_parser.parse_args(args.command_args)
         if bookmark_args.help_flag or not bookmark_args.bookmark_command:
             print_usage()
-            return
+            return 0
         if bookmark_args.bookmark_command == "ls":
             list_parser = build_bookmark_list_parser()
             list_args = list_parser.parse_args(bookmark_args.bookmark_args)
             if list_args.help_flag:
                 print_usage()
-                return
+                return 0
             oauth2_user_token = _ensure_oauth2_user_token()
             xdk_client = _build_xdk_client(oauth2_user_token)
             bookmarks = get_bookmarks(xdk_client, limit=max(1, list_args.count))
             if list_args.json_output:
                 print(json.dumps({"bookmarks": bookmarks}, indent=2))
-                return
+                return 0
             if not bookmarks:
                 print("No bookmarks found.")
-                return
+                return 0
             for index, bookmark in enumerate(bookmarks, start=1):
                 header = f"[{index}] {bookmark['tweet_id']} @{bookmark['author_username'] or 'unknown'}"
                 if bookmark["created_at"]:
@@ -929,7 +810,7 @@ def main():
                 print(bookmark["url"])
                 print(bookmark["text"] or "-")
                 print("")
-            return
+            return 0
         if bookmark_args.bookmark_command == "rm":
             if len(bookmark_args.bookmark_args) != 1:
                 raise SystemExit("Usage: x b rm <tweet_id>")
@@ -937,7 +818,7 @@ def main():
             xdk_client = _build_xdk_client(oauth2_user_token)
             delete_bookmark(xdk_client, bookmark_args.bookmark_args[0])
             print(f"Removed bookmark. id={bookmark_args.bookmark_args[0]}")
-            return
+            return 0
         raise SystemExit("Usage: x b ls [-j] [-n <count>] | x b rm <tweet_id>")
 
     if args.command == "r":
@@ -945,7 +826,7 @@ def main():
         reply_args = reply_parser.parse_args(args.command_args)
         if reply_args.help_flag or not reply_args.tweet_id:
             print_usage()
-            return
+            return 0
         if reply_args.edit and reply_args.text:
             raise SystemExit("Use `x r <tweet_id> -e` without inline text.")
         if reply_args.edit:
@@ -960,7 +841,7 @@ def main():
         result_payload = _response_to_dict(result)
         tweet_id = result_payload.get("data", {}).get("id", "unknown")
         print(f"Posted reply to X. id={tweet_id}")
-        return
+        return 0
 
     if args.command != "p":
         raise SystemExit(
@@ -973,7 +854,7 @@ def main():
 
     if publish_args.help_flag:
         print_usage()
-        return
+        return 0
 
     if publish_args.edit:
         text_parts = list(publish_args.text)
@@ -988,7 +869,7 @@ def main():
 
     if not text and not media_path:
         print_usage()
-        return
+        return 0
 
     oauth2_user_token = _ensure_valid_oauth2_user_token()
     xdk_client = _build_xdk_client(oauth2_user_token)
@@ -1002,9 +883,24 @@ def main():
     tweet_id = result_payload.get("data", {}).get("id", "unknown")
     if media_ids:
         print(f"Posted to X with media. id={tweet_id}")
-    else:
-        print(f"Posted to X. id={tweet_id}")
+        return 0
+    print(f"Posted to X. id={tweet_id}")
+    return 0
+
+
+APP_SPEC = AppSpec(
+    app_name="x",
+    version=__version__,
+    help_text=HELP_TEXT,
+    install_script_path=INSTALL_SCRIPT,
+    no_args_mode="help",
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    return run_app(APP_SPEC, args, _dispatch)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
