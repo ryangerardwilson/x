@@ -41,8 +41,19 @@ no_modify_path=false
 binary_path=""
 
 get_latest_version() {
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p'
+  local latest=""
+  if command -v gh >/dev/null 2>&1; then
+    latest="$(gh release view --repo "${REPO}" --json tagName --jq '.tagName' 2>/dev/null || true)"
+    latest="${latest#v}"
+  fi
+  if [[ -z "$latest" ]]; then
+    latest="$(
+      curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" \
+        | sed -n 's#.*/releases/tag/v\([^/?#[:space:]]*\).*#\1#p'
+    )"
+  fi
+  [[ -n "$latest" ]] || return 1
+  printf '%s\n' "$latest"
 }
 
 while [[ $# -gt 0 ]]; do
