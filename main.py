@@ -15,8 +15,6 @@ from rgw_cli_contract import AppSpec, resolve_install_script_path, run_app
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
 MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-ANSI_RESET = "\033[0m"
-ANSI_GRAY = "\033[38;5;245m"
 INSTALL_SCRIPT = resolve_install_script_path(__file__)
 HELP_TEXT = """X CLI
 publish to X and manage reply workflows from the terminal
@@ -82,12 +80,6 @@ def _default_oauth2_token_file():
     else:
         base = os.path.expanduser("~/.local/share")
     return os.path.join(base, "x", "tokens", "oauth2_token.json")
-
-
-def _muted_text(text):
-    if not sys.stdout.isatty() or "NO_COLOR" in os.environ:
-        return text
-    return f"{ANSI_GRAY}{text}{ANSI_RESET}"
 
 
 def get_env(name, fallback_name=None):
@@ -186,7 +178,7 @@ def _build_oauth2_auth(payload):
 
 
 def print_usage():
-    print(_muted_text(HELP_TEXT.rstrip()))
+    print(HELP_TEXT.rstrip())
 
 
 def _load_oauth2_token_payload():
