@@ -10,6 +10,13 @@ Terminal CLI for publishing to X and handling bookmark-driven reply flows.
 curl -fsSL https://raw.githubusercontent.com/ryangerardwilson/x/main/install.sh | bash
 ```
 
+Manually add this to `~/.bashrc`, then reload your shell:
+
+```bash
+export PATH="$HOME/.x/bin:$PATH"
+source ~/.bashrc
+```
+
 ## Setup
 
 Set your X OAuth2 app credentials for PKCE login:
