@@ -32,7 +32,7 @@ class InstallScriptTests(unittest.TestCase):
             env["HOME"] = str(home_dir)
 
             result = subprocess.run(
-                ["/usr/bin/bash", str(INSTALLER), "-v"],
+                ["/usr/bin/bash", str(INSTALLER), "version"],
                 capture_output=True,
                 text=True,
                 env=env,
@@ -62,7 +62,7 @@ class InstallScriptTests(unittest.TestCase):
             self._write_executable(
                 bin_dir / "x",
                 "#!/usr/bin/bash\n"
-                "if [[ \"$1\" == \"-v\" ]]; then\n"
+                "if [[ \"$1\" == \"version\" ]]; then\n"
                 "  printf '0.1.21\\n'\n"
                 "  exit 0\n"
                 "fi\n"
@@ -75,7 +75,7 @@ class InstallScriptTests(unittest.TestCase):
             env["HOME"] = str(home_dir)
 
             result = subprocess.run(
-                ["/usr/bin/bash", str(INSTALLER), "-u"],
+                ["/usr/bin/bash", str(INSTALLER), "upgrade"],
                 capture_output=True,
                 text=True,
                 env=env,

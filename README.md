@@ -2,7 +2,7 @@
 
 Terminal CLI for publishing to X and handling bookmark-driven reply flows.
 
-`x -v` prints the installed app version from `_version.py`. Source checkouts keep a placeholder value; tagged release builds stamp the shipped artifact with the real version.
+`x version` prints the installed app version from `_version.py`. Source checkouts keep a placeholder value; tagged release builds stamp the shipped artifact with the real version.
 
 ## Install
 
@@ -75,10 +75,10 @@ tweet.read tweet.write users.read media.write bookmark.read bookmark.write offli
 ```text
 x CLI
 
-flags:
-  x -h
-  x -v
-  x -u
+global actions:
+  x help
+  x version
+  x upgrade
 
 features:
   publish text directly
@@ -119,11 +119,11 @@ If the draft exceeds 280 characters, the CLI prompts for re-edit or cancel.
 ## Version And Upgrade
 
 ```bash
-x -v
-x -u
+x version
+x upgrade
 ```
 
-`x -u` delegates installation work to the top-level `install.sh` contract.
+`x upgrade` delegates installation work to the top-level `install.sh` contract.
 
 ## Auth Behavior
 
@@ -139,7 +139,7 @@ x -u
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python main.py -h
+python main.py help
 ```
 
 ## Release workflow

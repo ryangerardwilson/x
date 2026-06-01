@@ -22,12 +22,12 @@ INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/ryangerardwilson/x/main/
 HELP_TEXT = """X CLI
 publish to X and manage reply workflows from the terminal
 
-flags:
-  x -h
+global actions:
+  x help
     show this help
-  x -v
+  x version
     print the installed version
-  x -u
+  x upgrade
     upgrade to the latest release
 
 features:
@@ -197,7 +197,7 @@ def print_usage():
 def upgrade_app() -> int:
     if INSTALL_SCRIPT.exists():
         result = subprocess.run(
-            ["/usr/bin/env", "bash", str(INSTALL_SCRIPT), "-u"],
+            ["/usr/bin/env", "bash", str(INSTALL_SCRIPT), "upgrade"],
             check=False,
             text=True,
             env=os.environ.copy(),
@@ -214,7 +214,7 @@ def upgrade_app() -> int:
     try:
         script_path.chmod(0o700)
         result = subprocess.run(
-            ["/usr/bin/env", "bash", str(script_path), "-u"],
+            ["/usr/bin/env", "bash", str(script_path), "upgrade"],
             check=False,
             text=True,
             env=os.environ.copy(),
@@ -920,16 +920,16 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         print_help()
         return 0
-    if args == ["-h"]:
+    if args == ["help"]:
         print_help()
         return 0
-    if args == ["-v"]:
+    if args == ["version"]:
         print(__version__)
         return 0
-    if args == ["-u"]:
+    if args == ["upgrade"]:
         return upgrade_app()
-    if args[0] in {"-h", "-v", "-u"}:
-        raise SystemExit("Use x -h, x -v, or x -u by itself.")
+    if args[0] in {"help", "version", "upgrade"}:
+        raise SystemExit("Use x help, x version, or x upgrade by itself.")
     return _dispatch(args)
 
 

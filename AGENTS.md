@@ -2,7 +2,7 @@
 
 ## Workspace Defaults
 - Follow `/home/ryan/Subagents/cpo/CLI_TUI_STYLE_GUIDE.md` for CLI/TUI taste and help shape.
-- Follow `/home/ryan/Subagents/cto/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `-h`, `-v`, `-u`, installer behavior, release workflow expectations, and regression expectations.
+- Follow `/home/ryan/Subagents/cto/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `help`, `version`, `upgrade`, installer behavior, release workflow expectations, and regression expectations.
 - This file only records `x`-specific constraints or durable deviations.
 
 ## Scope
@@ -11,8 +11,8 @@
 - Supported primary flows are: text post, media post, editor compose, auth check, bookmark list/remove, reply post, version, and self-upgrade.
 
 ## CLI Contract
-- Only `-h`, `-v`, and `-u` remain as global launcher flags.
-- `x` with no content should print the same help text as `x -h`.
+- Only `help`, `version`, and `upgrade` remain as global launcher actions.
+- `x` with no content should print the same help text as `x help`.
 - Help output must include concrete examples and must not document GNU-style long flags for the app itself.
 - Canonical command grammar is declarative English only:
   - `x post "text"`
@@ -38,11 +38,11 @@
 
 ## Editing And UX
 - Editor resolution order is `$VISUAL`, then `$EDITOR`, then `vim`.
-- Error messages should reference declarative commands and the three global launcher flags only.
+- Error messages should reference declarative commands and the three global launcher actions only.
 - Keep output plain-text and deterministic.
 
 ## Repo Guardrails
 - `_version.py` is the single runtime version module.
 - Keep the checked-in value as a placeholder and let tagged release automation stamp the shipped artifact with the real version.
-- `install.sh` may keep conventional long installer flags, but user-facing app hints should reference the canonical app flags.
+- `install.sh` must expose word actions (`help`, `version`, `upgrade`, `from`) rather than dash meta flags, and user-facing app hints must stay on the same declarative grammar.
 - Keep runtime logic small and local unless complexity clearly justifies another module.
