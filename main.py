@@ -1,4 +1,3 @@
-import argparse
 import base64
 import json
 import mimetypes
@@ -8,14 +7,18 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
+from pathlib import Path
 
 from _version import __version__
-from rgw_cli_contract import AppSpec, resolve_install_script_path, run_app
 
 MEDIA_CHUNK_SIZE = 4 * 1024 * 1024
 MEDIA_UPLOAD_RETRIES = 8
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-INSTALL_SCRIPT = resolve_install_script_path(__file__)
+ANSI_GRAY = "\033[38;5;245m"
+ANSI_RESET = "\033[0m"
+INSTALL_SCRIPT = Path(__file__).resolve().with_name("install.sh")
+INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/ryangerardwilson/x/main/install.sh"
 HELP_TEXT = """X CLI
 publish to X and manage reply workflows from the terminal
 
@@ -29,36 +32,36 @@ flags:
 
 features:
   publish text directly
-  # x p <text>
-  x p "ship the patch"
+  # x post <text>
+  x post "ship the patch"
 
-  publish with media using the canonical media flag
-  # x p <text> -m <path>
-  x p "ship the patch" -m ~/media/demo.mp4
+  publish with media
+  # x post <text> with media <path>
+  x post "ship the patch" with media ~/media/demo.mp4
 
   compose in the editor resolved from $VISUAL, then $EDITOR, then vim
-  # x p -e | x p -m <path> -e
-  x p -e
-  x p -m ~/media/demo.mp4 -e
+  # x post in editor [with media <path>]
+  x post in editor
+  x post in editor with media ~/media/demo.mp4
 
-  validate OAuth2 auth and exit, or force token re-issuance
-  # x ea [-r]
-  x ea
-  x ea -r
+  validate OAuth2 auth or force token refresh
+  # x auth check | x auth refresh
+  x auth check
+  x auth refresh
 
   list bookmarked posts for reply workflows
-  # x b ls [-j] [-n <count>]
-  x b ls
-  x b ls -j -n 20
+  # x bookmarks list [json] [limit <count>]
+  x bookmarks list
+  x bookmarks list json limit 20
 
   remove a bookmark after you have handled it
-  # x b rm <tweet_id>
-  x b rm 1894451234567890123
+  # x bookmarks remove <tweet_id>
+  x bookmarks remove 1894451234567890123
 
   post a reply to a bookmarked post
-  # x r <tweet_id> <text> | x r <tweet_id> -e
-  x r 1894451234567890123 "The useful test is whether it survives contact with ops."
-  x r 1894451234567890123 -e
+  # x reply to <tweet_id> body <text> | x reply to <tweet_id> in editor
+  x reply to 1894451234567890123 body "The useful test is whether it survives contact with ops."
+  x reply to 1894451234567890123 in editor
 """
 
 
@@ -177,8 +180,48 @@ def _build_oauth2_auth(payload):
     )
 
 
+def muted(text: str) -> str:
+    if not sys.stdout.isatty() or "NO_COLOR" in os.environ:
+        return text
+    return f"{ANSI_GRAY}{text}{ANSI_RESET}"
+
+
+def print_help():
+    print(muted(HELP_TEXT.rstrip()))
+
+
 def print_usage():
-    print(HELP_TEXT.rstrip())
+    print_help()
+
+
+def upgrade_app() -> int:
+    if INSTALL_SCRIPT.exists():
+        result = subprocess.run(
+            ["/usr/bin/env", "bash", str(INSTALL_SCRIPT), "-u"],
+            check=False,
+            text=True,
+            env=os.environ.copy(),
+        )
+        return result.returncode
+
+    with urllib.request.urlopen(INSTALL_SCRIPT_URL) as response:
+        script_body = response.read()
+
+    with tempfile.NamedTemporaryFile(delete=False) as handle:
+        handle.write(script_body)
+        script_path = Path(handle.name)
+
+    try:
+        script_path.chmod(0o700)
+        result = subprocess.run(
+            ["/usr/bin/env", "bash", str(script_path), "-u"],
+            check=False,
+            text=True,
+            env=os.environ.copy(),
+        )
+        return result.returncode
+    finally:
+        script_path.unlink(missing_ok=True)
 
 
 def _load_oauth2_token_payload():
@@ -650,55 +693,36 @@ def post_tweet(text, *, xdk_client, media_ids=None, reply_to_tweet_id=None):
     )
 
 
-def build_top_level_parser():
-    parser = argparse.ArgumentParser(
-        description="Post to X from the command line.",
-        add_help=False,
-    )
-    parser.add_argument("command", nargs="?", help="Command: p, ea, b, or r.")
-    parser.add_argument("command_args", nargs=argparse.REMAINDER)
-    return parser
+def _find_phrase(args, phrase):
+    phrase = list(phrase)
+    limit = len(args) - len(phrase) + 1
+    for index in range(max(0, limit)):
+        if args[index : index + len(phrase)] == phrase:
+            return index
+    return -1
 
 
-def build_publish_parser():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
-    parser.add_argument("-m", dest="media", help="Path to an image/GIF/video to attach.")
-    parser.add_argument("-e", dest="edit", action="store_true", help="Open Vim to compose the post.")
-    parser.add_argument("text", nargs="*", help="Post text. If omitted, use -e to open Vim.")
-    return parser
-
-
-def build_bookmark_parser():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
-    parser.add_argument("bookmark_command", nargs="?", help="Bookmark command: ls or rm.")
-    parser.add_argument("bookmark_args", nargs=argparse.REMAINDER)
-    return parser
-
-
-def build_bookmark_list_parser():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
-    parser.add_argument("-j", dest="json_output", action="store_true", help="Print JSON.")
-    parser.add_argument("-n", dest="count", type=int, default=100, help="Maximum bookmarks to list.")
-    return parser
-
-
-def build_reply_parser():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
-    parser.add_argument("-e", dest="edit", action="store_true", help="Open editor for reply text.")
-    parser.add_argument("tweet_id", nargs="?", help="Tweet id to reply to.")
-    parser.add_argument("text", nargs=argparse.REMAINDER, help="Reply text.")
-    return parser
-
-
-def build_auth_check_parser():
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("-h", dest="help_flag", action="store_true", help="Show help and exit.")
-    parser.add_argument("-r", dest="reissue", action="store_true", help="Force token re-issuance.")
-    return parser
+def _parse_bookmark_list_args(args):
+    json_output = False
+    count = 100
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "json":
+            json_output = True
+            index += 1
+            continue
+        if token == "limit":
+            if index + 1 >= len(args):
+                raise SystemExit("valid shape: x bookmarks list [json] [limit <count>]")
+            try:
+                count = int(args[index + 1])
+            except ValueError:
+                raise SystemExit("limit must be a number")
+            index += 2
+            continue
+        raise SystemExit("valid shape: x bookmarks list [json] [limit <count>]")
+    return json_output, max(1, count)
 
 
 def read_from_vim(initial_text=""):
@@ -740,127 +764,122 @@ def read_from_vim(initial_text=""):
             pass
 
 
-def _dispatch(argv: list[str]) -> int:
-    parser = build_top_level_parser()
-    args = parser.parse_args(argv)
-
-    if not args.command:
-        print_usage()
-        return 0
-
-    if args.command == "ea":
-        auth_check_parser = build_auth_check_parser()
-        auth_args = auth_check_parser.parse_args(args.command_args)
-        if auth_args.help_flag:
-            print_usage()
-            return 0
-        if auth_args.reissue:
-            rc = _run_oauth2_login_helper()
-            if rc != 0:
-                raise SystemExit("OAuth2 token re-issuance failed.")
-            oauth2_user_token = get_user_access_token(auto_refresh=True)
-            if not oauth2_user_token:
-                raise SystemExit("OAuth2 token check failed after re-issuance.")
-            try:
-                _validate_oauth2_user_token(oauth2_user_token)
-            except Exception as exc:
-                raise SystemExit(f"OAuth2 token validation failed after re-issuance: {exc}")
-        else:
-            try:
-                _ensure_valid_oauth2_user_token()
-            except Exception as exc:
-                raise SystemExit(f"OAuth2 token validation failed: {exc}")
+def _dispatch_auth(args: list[str]) -> int:
+    if args == ["check"]:
+        try:
+            _ensure_valid_oauth2_user_token()
+        except Exception as exc:
+            raise SystemExit(f"OAuth2 token validation failed: {exc}")
         print("X OAuth2 token is ready.")
         return 0
 
-    if args.command == "b":
-        bookmark_parser = build_bookmark_parser()
-        bookmark_args = bookmark_parser.parse_args(args.command_args)
-        if bookmark_args.help_flag or not bookmark_args.bookmark_command:
-            print_usage()
-            return 0
-        if bookmark_args.bookmark_command == "ls":
-            list_parser = build_bookmark_list_parser()
-            list_args = list_parser.parse_args(bookmark_args.bookmark_args)
-            if list_args.help_flag:
-                print_usage()
-                return 0
-            oauth2_user_token = _ensure_oauth2_user_token()
-            xdk_client = _build_xdk_client(oauth2_user_token)
-            bookmarks = get_bookmarks(xdk_client, limit=max(1, list_args.count))
-            if list_args.json_output:
-                print(json.dumps({"bookmarks": bookmarks}, indent=2))
-                return 0
-            if not bookmarks:
-                print("No bookmarks found.")
-                return 0
-            for index, bookmark in enumerate(bookmarks, start=1):
-                header = f"[{index}] {bookmark['tweet_id']} @{bookmark['author_username'] or 'unknown'}"
-                if bookmark["created_at"]:
-                    header += f" {bookmark['created_at']}"
-                print(header)
-                print(bookmark["url"])
-                print(bookmark["text"] or "-")
-                print("")
-            return 0
-        if bookmark_args.bookmark_command == "rm":
-            if len(bookmark_args.bookmark_args) != 1:
-                raise SystemExit("Usage: x b rm <tweet_id>")
-            oauth2_user_token = _ensure_oauth2_user_token()
-            xdk_client = _build_xdk_client(oauth2_user_token)
-            delete_bookmark(xdk_client, bookmark_args.bookmark_args[0])
-            print(f"Removed bookmark. id={bookmark_args.bookmark_args[0]}")
-            return 0
-        raise SystemExit("Usage: x b ls [-j] [-n <count>] | x b rm <tweet_id>")
+    if args == ["refresh"]:
+        rc = _run_oauth2_login_helper()
+        if rc != 0:
+            raise SystemExit("OAuth2 token refresh failed.")
+        oauth2_user_token = get_user_access_token(auto_refresh=True)
+        if not oauth2_user_token:
+            raise SystemExit("OAuth2 token check failed after refresh.")
+        try:
+            _validate_oauth2_user_token(oauth2_user_token)
+        except Exception as exc:
+            raise SystemExit(f"OAuth2 token validation failed after refresh: {exc}")
+        print("X OAuth2 token is ready.")
+        return 0
 
-    if args.command == "r":
-        reply_parser = build_reply_parser()
-        reply_args = reply_parser.parse_args(args.command_args)
-        if reply_args.help_flag or not reply_args.tweet_id:
-            print_usage()
-            return 0
-        if reply_args.edit and reply_args.text:
-            raise SystemExit("Use `x r <tweet_id> -e` without inline text.")
-        if reply_args.edit:
-            text = read_from_vim()
-        else:
-            text = " ".join(reply_args.text).strip()
-        if not text:
-            raise SystemExit("Reply text is required.")
-        oauth2_user_token = _ensure_valid_oauth2_user_token()
+    raise SystemExit("valid shape: x auth check | x auth refresh")
+
+
+def _dispatch_bookmarks(args: list[str]) -> int:
+    if not args:
+        raise SystemExit("valid shape: x bookmarks list [json] [limit <count>] | x bookmarks remove <tweet_id>")
+
+    if args[0] == "list":
+        json_output, count = _parse_bookmark_list_args(args[1:])
+        oauth2_user_token = _ensure_oauth2_user_token()
         xdk_client = _build_xdk_client(oauth2_user_token)
-        result = post_tweet(text, xdk_client=xdk_client, reply_to_tweet_id=reply_args.tweet_id)
-        result_payload = _response_to_dict(result)
-        tweet_id = result_payload.get("data", {}).get("id", "unknown")
-        print(f"Posted reply to X. id={tweet_id}")
+        bookmarks = get_bookmarks(xdk_client, limit=count)
+        if json_output:
+            print(json.dumps({"bookmarks": bookmarks}, indent=2))
+            return 0
+        if not bookmarks:
+            print("No bookmarks found.")
+            return 0
+        for index, bookmark in enumerate(bookmarks, start=1):
+            header = f"[{index}] {bookmark['tweet_id']} @{bookmark['author_username'] or 'unknown'}"
+            if bookmark["created_at"]:
+                header += f" {bookmark['created_at']}"
+            print(header)
+            print(bookmark["url"])
+            print(bookmark["text"] or "-")
+            print("")
         return 0
 
-    if args.command != "p":
-        raise SystemExit(
-            "Usage: x p <text> [-m <path>] | x p -e [-m <path>] | x ea | x b ls [-j] [-n <count>] | x b rm <tweet_id> | x r <tweet_id> <text>"
-        )
-
-    publish_parser = build_publish_parser()
-    parse_publish = getattr(publish_parser, "parse_intermixed_args", publish_parser.parse_args)
-    publish_args = parse_publish(args.command_args)
-
-    if publish_args.help_flag:
-        print_usage()
+    if args[0] == "remove":
+        if len(args) != 2:
+            raise SystemExit("valid shape: x bookmarks remove <tweet_id>")
+        oauth2_user_token = _ensure_oauth2_user_token()
+        xdk_client = _build_xdk_client(oauth2_user_token)
+        delete_bookmark(xdk_client, args[1])
+        print(f"Removed bookmark. id={args[1]}")
         return 0
 
-    if publish_args.edit:
-        text_parts = list(publish_args.text)
-        media_path = publish_args.media
-        if text_parts:
-            raise SystemExit("Use `x p -e` without inline text.")
+    raise SystemExit("valid shape: x bookmarks list [json] [limit <count>] | x bookmarks remove <tweet_id>")
+
+
+def _dispatch_reply(args: list[str]) -> int:
+    if len(args) < 4 or args[0] != "to":
+        raise SystemExit("valid shape: x reply to <tweet_id> body <text> | x reply to <tweet_id> in editor")
+
+    tweet_id = args[1]
+    reply_args = args[2:]
+    if reply_args == ["in", "editor"]:
+        text = read_from_vim()
+    elif reply_args and reply_args[0] == "body":
+        text = " ".join(reply_args[1:]).strip()
+    else:
+        raise SystemExit("valid shape: x reply to <tweet_id> body <text> | x reply to <tweet_id> in editor")
+
+    if not text:
+        raise SystemExit("Reply text is required.")
+    oauth2_user_token = _ensure_valid_oauth2_user_token()
+    xdk_client = _build_xdk_client(oauth2_user_token)
+    result = post_tweet(text, xdk_client=xdk_client, reply_to_tweet_id=tweet_id)
+    result_payload = _response_to_dict(result)
+    posted_tweet_id = result_payload.get("data", {}).get("id", "unknown")
+    print(f"Posted reply to X. id={posted_tweet_id}")
+    return 0
+
+
+def _dispatch_post(args: list[str]) -> int:
+    if not args:
+        print_help()
+        return 0
+    if any(arg in {"-e", "-m"} for arg in args):
+        raise SystemExit("valid shape: x post <text> [with media <path>] | x post in editor [with media <path>]")
+
+    media_path = None
+    if args[:2] == ["in", "editor"]:
+        rest = args[2:]
+        if rest:
+            if len(rest) == 3 and rest[:2] == ["with", "media"]:
+                media_path = rest[2]
+            else:
+                raise SystemExit("valid shape: x post in editor [with media <path>]")
         text = read_from_vim()
     else:
-        text_parts = list(publish_args.text)
-        media_path = publish_args.media
-        text = " ".join(text_parts).strip()
+        media_index = _find_phrase(args, ["with", "media"])
+        if media_index >= 0:
+            media_args = args[media_index + 2 :]
+            if media_index == 0 or len(media_args) != 1:
+                raise SystemExit("valid shape: x post <text> with media <path>")
+            text = " ".join(args[:media_index]).strip()
+            media_path = media_args[0]
+        else:
+            text = " ".join(args).strip()
 
     if not text and not media_path:
-        print_usage()
+        print_help()
         return 0
 
     oauth2_user_token = _ensure_valid_oauth2_user_token()
@@ -880,18 +899,38 @@ def _dispatch(argv: list[str]) -> int:
     return 0
 
 
-APP_SPEC = AppSpec(
-    app_name="x",
-    version=__version__,
-    help_text=HELP_TEXT,
-    install_script_path=INSTALL_SCRIPT,
-    no_args_mode="help",
-)
+def _dispatch(argv: list[str]) -> int:
+    command = argv[0]
+    command_args = argv[1:]
+    if command == "post":
+        return _dispatch_post(command_args)
+    if command == "auth":
+        return _dispatch_auth(command_args)
+    if command == "bookmarks":
+        return _dispatch_bookmarks(command_args)
+    if command == "reply":
+        return _dispatch_reply(command_args)
+    raise SystemExit(
+        "valid commands: x post | x auth check | x auth refresh | x bookmarks list | x bookmarks remove | x reply to"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    return run_app(APP_SPEC, args, _dispatch)
+    if not args:
+        print_help()
+        return 0
+    if args == ["-h"]:
+        print_help()
+        return 0
+    if args == ["-v"]:
+        print(__version__)
+        return 0
+    if args == ["-u"]:
+        return upgrade_app()
+    if args[0] in {"-h", "-v", "-u"}:
+        raise SystemExit("Use x -h, x -v, or x -u by itself.")
+    return _dispatch(args)
 
 
 if __name__ == "__main__":

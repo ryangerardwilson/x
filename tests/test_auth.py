@@ -8,9 +8,7 @@ from unittest.mock import patch
 
 
 APP = Path(__file__).resolve().parents[1] / "main.py"
-CONTRACT_SRC = APP.parents[1] / "rgw_cli_contract" / "src"
 sys.path.insert(0, str(APP.parent))
-sys.path.insert(0, str(CONTRACT_SRC))
 SPEC = importlib.util.spec_from_file_location("x_main", APP)
 assert SPEC and SPEC.loader
 main = importlib.util.module_from_spec(SPEC)
@@ -19,14 +17,14 @@ SPEC.loader.exec_module(main)
 
 class AuthFlowTests(unittest.TestCase):
     def test_auth_check_validates_token_with_live_path(self):
-        with patch.object(sys, "argv", ["main.py", "ea"]):
+        with patch.object(sys, "argv", ["main.py", "auth", "check"]):
             with patch.object(main, "_ensure_valid_oauth2_user_token", side_effect=RuntimeError("boom")):
                 with self.assertRaises(SystemExit) as exc:
                     main.main()
         self.assertEqual(str(exc.exception), "OAuth2 token validation failed: boom")
 
     def test_auth_reissue_validates_reissued_token(self):
-        with patch.object(sys, "argv", ["main.py", "ea", "-r"]):
+        with patch.object(sys, "argv", ["main.py", "auth", "refresh"]):
             with patch.object(main, "_run_oauth2_login_helper", return_value=0):
                 with patch.object(main, "get_user_access_token", return_value="token"):
                     with patch.object(main, "_validate_oauth2_user_token") as validate:
@@ -45,7 +43,7 @@ class AuthFlowTests(unittest.TestCase):
 
     def test_plain_publish_uses_xdk_client(self):
         xdk_client = object()
-        with patch.object(sys, "argv", ["main.py", "p", "hello world"]):
+        with patch.object(sys, "argv", ["main.py", "post", "hello world"]):
             with patch.object(main, "_ensure_valid_oauth2_user_token", return_value="token"):
                 with patch.object(main, "_build_xdk_client", return_value=xdk_client) as build_client:
                     with patch.object(main, "post_tweet", return_value={"data": {"id": "42"}}) as post_tweet:
@@ -57,7 +55,7 @@ class AuthFlowTests(unittest.TestCase):
 
     def test_reply_uses_xdk_client(self):
         xdk_client = object()
-        with patch.object(sys, "argv", ["main.py", "r", "123", "hello"]):
+        with patch.object(sys, "argv", ["main.py", "reply", "to", "123", "body", "hello"]):
             with patch.object(main, "_ensure_valid_oauth2_user_token", return_value="token"):
                 with patch.object(main, "_build_xdk_client", return_value=xdk_client) as build_client:
                     with patch.object(main, "post_tweet", return_value={"data": {"id": "99"}}) as post_tweet:

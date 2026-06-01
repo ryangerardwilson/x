@@ -82,36 +82,36 @@ flags:
 
 features:
   publish text directly
-  # x p <text>
-  x p "ship the patch"
+  # x post <text>
+  x post "ship the patch"
 
-  publish with media using the canonical media flag
-  # x p <text> -m <path>
-  x p "ship the patch" -m ~/media/demo.mp4
+  publish with media
+  # x post <text> with media <path>
+  x post "ship the patch" with media ~/media/demo.mp4
 
   compose in the editor
-  # x p -e | x p -m <path> -e
-  x p -e
-  x p -m ~/media/demo.mp4 -e
+  # x post in editor [with media <path>]
+  x post in editor
+  x post in editor with media ~/media/demo.mp4
 
-  validate OAuth2 auth and exit, or force token re-issuance
-  # x ea [-r]
-  x ea
-  x ea -r
+  validate OAuth2 auth or force token refresh
+  # x auth check | x auth refresh
+  x auth check
+  x auth refresh
 
   list bookmarked posts for reply workflows
-  # x b ls [-j] [-n <count>]
-  x b ls
-  x b ls -j -n 20
+  # x bookmarks list [json] [limit <count>]
+  x bookmarks list
+  x bookmarks list json limit 20
 
   remove a bookmark after you have handled it
-  # x b rm <tweet_id>
-  x b rm 1894451234567890123
+  # x bookmarks remove <tweet_id>
+  x bookmarks remove 1894451234567890123
 
   post a reply to a bookmarked post
-  # x r <tweet_id> <text> | x r <tweet_id> -e
-  x r 1894451234567890123 "The useful test is whether it survives contact with ops."
-  x r 1894451234567890123 -e
+  # x reply to <tweet_id> body <text> | x reply to <tweet_id> in editor
+  x reply to 1894451234567890123 body "The useful test is whether it survives contact with ops."
+  x reply to 1894451234567890123 in editor
 ```
 
 If the draft exceeds 280 characters, the CLI prompts for re-edit or cancel.
@@ -128,9 +128,9 @@ x -u
 ## Auth Behavior
 
 - OAuth2 user token is required for posting.
-- `x ea -r` forces a fresh OAuth2 login and rewrites the saved token.
+- `x auth refresh` forces a fresh OAuth2 login and rewrites the saved token.
 - Bookmark lookup and removal require an OAuth2 user token with bookmark scopes.
-- `-m` requires an OAuth2 user token with media scope.
+- Media posts require an OAuth2 user token with media scope.
 - X API calls use the X SDK path; there is no raw HTTP publish fallback.
 
 ## Source Run

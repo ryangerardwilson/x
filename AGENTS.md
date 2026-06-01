@@ -1,8 +1,8 @@
 # x Agent Guide
 
 ## Workspace Defaults
-- Follow `/home/ryan/Documents/agent_context/CLI_TUI_STYLE_GUIDE.md` for CLI/TUI taste and help shape.
-- Follow `/home/ryan/Documents/agent_context/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `-h`, `-v`, `-u`, installer behavior, release workflow expectations, and regression expectations.
+- Follow `/home/ryan/Subagents/cpo/CLI_TUI_STYLE_GUIDE.md` for CLI/TUI taste and help shape.
+- Follow `/home/ryan/Subagents/cto/CANONICAL_REFERENCE_IMPLEMENTATION_FOR_CLI_AND_TUI_APPS.md` for executable contract details such as `-h`, `-v`, `-u`, installer behavior, release workflow expectations, and regression expectations.
 - This file only records `x`-specific constraints or durable deviations.
 
 ## Scope
@@ -11,15 +11,21 @@
 - Supported primary flows are: text post, media post, editor compose, auth check, bookmark list/remove, reply post, version, and self-upgrade.
 
 ## CLI Contract
-- Canonical app flags are short only: `-h`, `-v`, `-u`, `-e`, `-m`.
+- Only `-h`, `-v`, and `-u` remain as global launcher flags.
 - `x` with no content should print the same help text as `x -h`.
 - Help output must include concrete examples and must not document GNU-style long flags for the app itself.
-- Preserve the current publish grammar:
-  - `x p "text"`
-  - `x p "text" -m /path/to/file`
-  - `x p -e`
-  - `x p -m /path/to/file -e`
-- Auth check grammar is `x ea`.
+- Canonical command grammar is declarative English only:
+  - `x post "text"`
+  - `x post "text" with media /path/to/file`
+  - `x post in editor`
+  - `x post in editor with media /path/to/file`
+  - `x auth check`
+  - `x auth refresh`
+  - `x bookmarks list [json] [limit <count>]`
+  - `x bookmarks remove <tweet_id>`
+  - `x reply to <tweet_id> body "text"`
+  - `x reply to <tweet_id> in editor`
+- Do not keep terse aliases such as `p`, `ea`, `b ls`, `b rm`, `r`, `-e`, or `-m`.
 - Success output should stay terse and include the posted id.
 
 ## Auth And Storage
@@ -32,7 +38,7 @@
 
 ## Editing And UX
 - Editor resolution order is `$VISUAL`, then `$EDITOR`, then `vim`.
-- Error messages should reference only canonical short flags.
+- Error messages should reference declarative commands and the three global launcher flags only.
 - Keep output plain-text and deterministic.
 
 ## Repo Guardrails
